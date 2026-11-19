@@ -1,0 +1,41 @@
+import "server-only";
+import Stripe from "stripe";
+import { HttpError } from "@/lib/http";
+
+let client: Stripe | null = null;
+
+export function getStripe() {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new HttpError(500, "Stripe is not configured");
+  if (!client) client = new Stripe(key, { appInfo: { name: "Chillrig", version: "0.1.0" } });
+  return client;
+}
+
+export function stripeId(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && "id" in value && typeof value.id === "string") return value.id;
+  return null;
+}
+
+let priceCache: { at: number; label: string } | null = null;
+
+export async function displayPrice() {
+  if (priceCache && Date.now() - priceCache.at < 10 * 60 * 1000) return priceCache.label;
+  const stripe = getStripe();
+  const priceId = process.env.STRIPE_PRICE_ID;
+  if (!priceId) throw new HttpError(500, "Stripe price is not configured");
+  const price = await stripe.prices.retrieve(priceId);
+  const amount = price.unit_amount ?? 0;
+  const currency = price.currency || "eur";
+  const label =
+    currency === "eur" && amount === 2900
+      ? "€29"
+      : new Intl.NumberFormat("en-IE", {
+          style: "currency",
+          currency: currency.toUpperCase(),
+          minimumFractionDigits: amount % 100 === 0 ? 0 : 2,
+          maximumFractionDigits: 2,
+        }).format(amount / 100);
+  priceCache = { at: Date.now(), label };
+  return label;
+}
