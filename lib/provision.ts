@@ -5,7 +5,7 @@ import { createDnsRecord, deleteDnsRecord } from "@/lib/cloudflare";
 import { renderUserData } from "@/lib/cloud-init";
 import { sendReadyEmail } from "@/lib/email";
 import { parseGitHubRepo } from "@/lib/github";
-import { fallbackNotice, placementPlan } from "@/lib/hetzner-types";
+import { fallbackNotice, maxMonthlyEur, placementPlan } from "@/lib/hetzner-types";
 import {
   createFirewall,
   createServer,
@@ -79,6 +79,7 @@ async function ensureMockBox(userId: string, subscriptionId: string | null) {
 async function ensureLiveBox(userId: string, subscriptionId: string | null) {
   const existing = await store().getBoxByUser(userId);
   if (existing && (existing.status === "running" || existing.status === "destroying")) return existing;
+  if (existing?.status === "waiting") return existing;
   if (existing?.status === "provisioning") {
     if (existing.hetznerServerId) return existing;
     const age = Date.now() - new Date(existing.createdAt).getTime();
@@ -141,6 +142,7 @@ async function continueLiveProvision(box: Box) {
     singleType: process.env.HETZNER_SERVER_TYPE,
     locations: process.env.HETZNER_LOCATIONS,
     preferredLocation: process.env.HETZNER_LOCATION,
+    maxMonthlyEur: maxMonthlyEur(process.env.HETZNER_MAX_MONTHLY_EUR),
   });
   let created: Awaited<ReturnType<typeof createServer>> | null = null;
   let placed = plan[0];
@@ -164,6 +166,15 @@ async function continueLiveProvision(box: Box) {
     }
   }
   if (!created || !placed) {
+    if (!lastError || isCapacityError(lastError)) {
+      box.status = "waiting";
+      box.error = null;
+      box.hetznerServerId = null;
+      box.lastSyncAt = new Date().toISOString();
+      await store().saveBox(box);
+      console.warn("No Hetzner capacity under the monthly cap; waiting");
+      return box;
+    }
     box.status = "error";
     box.error = publicError(lastError);
     await store().saveBox(box);
@@ -211,6 +222,13 @@ export async function syncBox(userId: string) {
       await store().markReady(box.id);
     }
     return store().getBoxByUser(userId);
+  }
+  if (box.status === "waiting") {
+    const last = box.lastSyncAt ? new Date(box.lastSyncAt).getTime() : 0;
+    if (Date.now() - last < 60_000) return box;
+    const claimed = await store().claimSync(box.id, box.lastSyncAt);
+    if (!claimed) return store().getBoxByUser(userId);
+    return continueLiveProvision(box);
   }
   if (box.status !== "provisioning" && box.status !== "running") return box;
   const staleMs = box.status === "provisioning" ? 3000 : 60_000;

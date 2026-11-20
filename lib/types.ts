@@ -9,6 +9,7 @@ export type SessionUser = {
 
 export type BoxStatus =
   | "provisioning"
+  | "waiting"
   | "running"
   | "destroying"
   | "destroyed"

@@ -119,10 +119,15 @@ describe("install script", () => {
     assert.match(script, /conntrack --ctstate ESTABLISHED,RELATED/);
     assert.ok(script.indexOf("ufw allow 22/tcp") < script.indexOf("ufw --force enable"));
     assert.ok(script.indexOf("ufw allow 22/tcp") < script.indexOf("ufw default deny incoming"));
+    const defaults = placementPlan();
+    assert.deepEqual([...new Set(defaults.map((item) => item.serverType))], ["cx33", "cax21", "cx23"]);
+    assert.equal(placementPlan({ types: "cpx32,cx33", maxMonthlyEur: 12 }).every((item) => item.serverType === "cx33"), true);
+    assert.equal(placementPlan({ types: "cpx32", maxMonthlyEur: 12 }).length, 0);
     const plan = placementPlan({
       types: "cx33,cax21,cpx32,cx23",
       locations: "fsn1,nbg1,hel1",
       preferredLocation: "fsn1",
+      maxMonthlyEur: 12,
     });
     assert.deepEqual(
       plan.slice(0, 3).map((item) => `${item.serverType}@${item.location}`),

@@ -25,7 +25,7 @@ create table if not exists public.boxes (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null unique references public.profiles (id) on delete cascade,
   slug text not null unique,
-  status text not null check (status in ('provisioning', 'running', 'destroying', 'destroyed', 'error')),
+  status text not null check (status in ('provisioning', 'waiting', 'running', 'destroying', 'destroyed', 'error')),
   hetzner_server_id bigint,
   hetzner_firewall_id bigint,
   ipv4 text,

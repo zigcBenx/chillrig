@@ -18,8 +18,9 @@ export const SERVER_CATALOG: ServerTypeSpec[] = [
   { name: "cx23", vcpu: 2, memoryGb: 4, diskGb: 40, monthlyEur: 5.99, arch: "x86" },
 ];
 
-export const DEFAULT_TYPE_CHAIN = ["cx33", "cax21", "cpx32", "cx23"];
+export const DEFAULT_TYPE_CHAIN = ["cx33", "cax21", "cx23"];
 export const DEFAULT_LOCATIONS = ["fsn1", "nbg1", "hel1"];
+export const DEFAULT_MAX_MONTHLY_EUR = 12;
 
 export type Placement = {
   serverType: string;
@@ -27,22 +28,28 @@ export type Placement = {
   spec: ServerTypeSpec | null;
 };
 
+export function maxMonthlyEur(value?: string) {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return DEFAULT_MAX_MONTHLY_EUR;
+}
+
 export function placementPlan(options?: {
   types?: string;
   singleType?: string;
   locations?: string;
   preferredLocation?: string;
+  maxMonthlyEur?: number;
 }): Placement[] {
+  const cap = options?.maxMonthlyEur ?? DEFAULT_MAX_MONTHLY_EUR;
   const types = typeChain(options?.types, options?.singleType);
   const locations = locationChain(options?.preferredLocation, options?.locations);
   const plan: Placement[] = [];
   for (const serverType of types) {
+    const spec = SERVER_CATALOG.find((item) => item.name === serverType) ?? null;
+    if (!spec || spec.monthlyEur > cap) continue;
     for (const location of locations) {
-      plan.push({
-        serverType,
-        location,
-        spec: SERVER_CATALOG.find((item) => item.name === serverType) ?? null,
-      });
+      plan.push({ serverType, location, spec });
     }
   }
   return plan;

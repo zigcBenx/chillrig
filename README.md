@@ -63,7 +63,7 @@ Set every variable in [`.env.example`](.env.example) on the host. Leave `CHILLRI
 
 ### Hetzner and Cloudflare
 
-The API token needs permission to create servers, enable backups, and manage firewalls. The default machine is `cx33` (4 vCPU, 8 GB, about €8.49–€8.99/month). If Hetzner returns `resource_unavailable`, the control plane tries that type in `fsn1`, `nbg1`, and `hel1`, then `cax21` (same size, ARM, €10.99), `cpx32` (same size, €30.49), and `cx23` (2 vCPU / 4 GB, €5.99). A pricier choice is written to the server log. The type and location are stored on the box. Override the lists with `HETZNER_SERVER_TYPES` and `HETZNER_LOCATIONS`.
+The API token needs permission to create servers, enable backups, and manage firewalls. The default machine is `cx33` (4 vCPU, 8 GB, about €8.49–€8.99/month). If Hetzner returns `resource_unavailable`, the control plane tries that type in `fsn1`, `nbg1`, and `hel1`, then `cax21` (€10.99) and `cx23` (€5.99). Nothing above `HETZNER_MAX_MONTHLY_EUR` (default €12) is chosen. If every allowed type is full, the box waits and retries about once a minute instead of failing.
 
 The Cloudflare token needs DNS edit on the zone in `CLOUDFLARE_ZONE_ID`. Records are created with `proxied: false`.
 
@@ -111,7 +111,7 @@ Mock state is stored in `.data/` (or `/tmp/chillrig` on Vercel). It is gitignore
 - The box stays up through Stripe's payment retries and is deleted only after the subscription is canceled or unpaid. A webhook that never arrives leaves the machine running.
 - Terminal tickets travel in the WebSocket query string for about 90 seconds. Caddy access logs are left off. Turning them on would record those tickets on the VM.
 - The ready token is removed from cloud-init user-data after the callback. Until that runs, it can only mark that one box ready.
-- If every type in the fallback chain is unavailable, the box is marked `error` and a paid subscriber can retry without being charged again. `cpx32` costs about €30/month when it is the only type left.
+- If every type under the monthly cap is unavailable, the box stays in "Waiting for capacity" and is created when a slot opens. Opening the setup page retries about once a minute.
 - Two checkout webhooks arriving in the same moment rely on the one-box database constraint. A crash after Hetzner accepts a server but before the id is saved could orphan a machine; the next sync adopts or the error path deletes known ids.
 - Preview iframes the subscriber's own app. It is a different site from the control plane, so it does not receive the Chillrig session cookie.
 - Upstream package names for Claude Code and Codex can change. `install.sh` installs the current official npm packages.

@@ -32,6 +32,7 @@ export function SetupView() {
   }
 
   const failed = data?.box?.status === "error";
+  const waiting = data?.box?.status === "waiting";
 
   return (
     <main className="grid min-h-dvh place-items-center px-5 pb-12 pt-24">
@@ -47,7 +48,9 @@ export function SetupView() {
             <span className={`h-3 w-3 rounded-full ${failed ? "bg-[#d06a6a]" : "bg-emerald-400 shadow-[0_0_16px_#34d399]"}`} />
           </div>
         </div>
-        <h1 className="headline mt-8 text-3xl">{failed ? "Needs attention" : "Setting up your box"}</h1>
+        <h1 className="headline mt-8 text-3xl">
+          {failed ? "Needs attention" : waiting ? "Waiting for capacity" : "Setting up your box"}
+        </h1>
         {failed ? <p className="muted mt-3 text-sm">{data?.box?.error || "Setup stopped"}</p> : null}
         <ul className="mt-8 space-y-3 text-left">
           {data?.steps.map((step) => (

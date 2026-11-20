@@ -31,7 +31,7 @@ export function DashboardView() {
       router.replace("/checkout");
       return;
     }
-    if (data.box.status === "provisioning" || data.box.status === "destroying") {
+    if (data.box.status === "provisioning" || data.box.status === "waiting" || data.box.status === "destroying") {
       router.replace("/setup");
     }
   }, [data, router]);
@@ -80,7 +80,7 @@ export function DashboardView() {
     router.refresh();
   }
 
-  if (!data?.box || data.box.status === "provisioning") {
+  if (!data?.box || data.box.status === "provisioning" || data.box.status === "waiting") {
     return (
       <main className="mx-auto grid min-h-dvh w-full max-w-5xl place-items-center px-4 pt-24">
         <div className="glass h-40 w-full max-w-xl animate-pulse" />
