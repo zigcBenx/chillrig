@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { subscriptionAllowsBox, subscriptionEndsBox } from "../lib/billing-policy";
+import { fallbackNotice, isPricierThanPlan, placementPlan, PLAN_MONTHLY_EUR } from "../lib/hetzner-types";
 import { renderUserData } from "../lib/cloud-init";
 import { parseGitHubRepo } from "../lib/github";
 import { buildSteps, mockIndex, mockIsReady } from "../lib/progress";
@@ -91,6 +92,7 @@ describe("account view", () => {
       destroyedAt: null,
       lastSyncAt: null,
       backupEnabled: false,
+      serverType: null,
     };
     const view = toAccountView({ mock: true, domain: "chillrig.test", user, subscription: null, box });
     assert.equal(view.previewUrl, null);
@@ -114,6 +116,33 @@ describe("install script", () => {
     assert.match(script, /shred -u/);
     assert.match(script, /22\/tcp/);
     assert.match(script, /enable-tls\.sh/);
+    assert.match(script, /conntrack --ctstate ESTABLISHED,RELATED/);
+    assert.ok(script.indexOf("ufw allow 22/tcp") < script.indexOf("ufw --force enable"));
+    assert.ok(script.indexOf("ufw allow 22/tcp") < script.indexOf("ufw default deny incoming"));
+    const plan = placementPlan({
+      types: "cx33,cax21,cpx32,cx23",
+      locations: "fsn1,nbg1,hel1",
+      preferredLocation: "fsn1",
+    });
+    assert.deepEqual(
+      plan.slice(0, 3).map((item) => `${item.serverType}@${item.location}`),
+      ["cx33@fsn1", "cx33@nbg1", "cx33@hel1"],
+    );
+    assert.equal(plan[3]?.serverType, "cax21");
+    assert.deepEqual(
+      plan.slice(-3).map((item) => item.serverType),
+      ["cx23", "cx23", "cx23"],
+    );
+    assert.equal(placementPlan({ preferredLocation: "hel1" })[0]?.location, "hel1");
+    assert.equal(isPricierThanPlan(8.99), false);
+    assert.equal(isPricierThanPlan(10.99), true);
+    assert.equal(isPricierThanPlan(5.99), false);
+    const primary = plan[0];
+    assert.ok(primary);
+    assert.equal(fallbackNotice(primary, primary), null);
+    assert.match(fallbackNotice(plan[3]!, primary) ?? "", /pricier than the €8.49/);
+    assert.doesNotMatch(fallbackNotice(plan.at(-1)!, primary) ?? "", /pricier/);
+    assert.equal(PLAN_MONTHLY_EUR, 8.49);
     assert.equal(subscriptionAllowsBox("past_due"), true);
     assert.equal(subscriptionAllowsBox("active"), true);
     assert.equal(subscriptionAllowsBox("canceled"), false);

@@ -31,19 +31,28 @@ export type CreatedServer = {
   status: string;
 };
 
-export async function createServer(input: { name: string; userData: string; location: string }) {
-  const serverType = process.env.HETZNER_SERVER_TYPE || "cx33";
+export async function createServer(input: {
+  name: string;
+  userData: string;
+  location: string;
+  serverType: string;
+}) {
   const data = await hetzner("/servers", {
     method: "POST",
     body: JSON.stringify({
       name: input.name,
-      server_type: serverType,
+      server_type: input.serverType,
       image: "ubuntu-24.04",
       location: input.location,
       start_after_create: true,
       user_data: input.userData,
       public_net: { enable_ipv4: true, enable_ipv6: true },
-      labels: { chillrig: "1", slug: input.name.replace(/^box-/, "") },
+      labels: {
+        chillrig: "1",
+        slug: input.name.replace(/^box-/, ""),
+        server_type: input.serverType,
+        location: input.location,
+      },
     }),
   });
   return readServer(data.server);
@@ -112,6 +121,7 @@ export function isCapacityError(error: unknown) {
   const code = (error as { code?: string }).code ?? "";
   const status = (error as { status?: number }).status ?? 0;
   return (
+    status === 412 ||
     status >= 500 ||
     ["resource_unavailable", "placement_error", "unavailable", "server_type_unavailable"].includes(code)
   );

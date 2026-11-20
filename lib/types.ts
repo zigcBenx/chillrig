@@ -45,6 +45,7 @@ export type Box = {
   hetznerFirewallId: number | null;
   ipv4: string | null;
   region: string;
+  serverType: string | null;
   appPort: number;
   stripeSubscriptionId: string | null;
   dnsRecordId: string | null;

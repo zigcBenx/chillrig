@@ -9,6 +9,14 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+if [[ "${CHILLRIG_LOGGING:-}" != "1" ]]; then
+  export CHILLRIG_LOGGING=1
+  touch /var/log/chillrig-install.log
+  chmod 600 /var/log/chillrig-install.log
+  exec > >(tee -a /var/log/chillrig-install.log) 2>&1
+fi
+trap '' HUP
+
 export DEBIAN_FRONTEND=noninteractive
 CHILLRIG_USER="${CHILLRIG_USER:-coder}"
 CHILLRIG_APP_PORT="${CHILLRIG_APP_PORT:-3000}"
@@ -386,21 +394,51 @@ EOF
   systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 fi
 
-ufw default deny incoming
-ufw default allow outgoing
+# Allow SSH before the default deny and before the firewall is enabled.
+# Enabling it otherwise resets the current SSH session (client exit 255) even
+# though the rest of the script keeps running.
+ufw allow 22/tcp
+ufw allow OpenSSH
 ufw allow 80/tcp
 ufw allow 443/tcp
-if [[ "$CHILLRIG_CLOSE_SSH" == "1" ]]; then
+ufw default deny incoming
+ufw default allow outgoing
+if [[ -n "${SSH_CONNECTION:-}" && -f "$0" ]]; then
+  echo "Enabling the firewall in the background so this SSH session is not reset."
+  echo "Log: /var/log/chillrig-install.log"
+  export CHILLRIG_USER CHILLRIG_DOMAIN CHILLRIG_CONTROL_PLANE CHILLRIG_CLOSE_SSH
+  export CHILLRIG_APP_PORT CHILLRIG_READY_URL CHILLRIG_READY_TOKEN CHILLRIG_SLUG CHILLRIG_ACME_EMAIL
+  {
+    echo "#!/bin/bash"
+    echo "set -euo pipefail"
+    echo "unset SSH_CONNECTION"
+    echo "sleep 2"
+    sed -n '/^# --- finish-firewall ---$/,$p' "$0"
+  } > /opt/chillrig/finish-install.sh
+  chmod 0755 /opt/chillrig/finish-install.sh
+  setsid nohup /opt/chillrig/finish-install.sh >> /var/log/chillrig-install.log 2>&1 < /dev/null &
+  exit 0
+fi
+# --- finish-firewall ---
+# Accept the session that is already open, then enable. ufw's reload can drop it
+# for a moment; the rule is inserted again immediately after enable.
+keep_established() {
+  iptables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+    iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+  ip6tables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+    ip6tables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+}
+keep_established
+ufw --force enable
+keep_established
+if [[ "$CHILLRIG_CLOSE_SSH" == "1" && -z "${SSH_CONNECTION:-}" ]]; then
   # Delete every SSH allow, including "22/tcp" and "OpenSSH", highest number first.
   while true; do
     num=$(ufw status numbered | grep ALLOW | grep -E 'OpenSSH|22/tcp' | sed -n 's/^\[\s*\([0-9][0-9]*\)\].*/\1/p' | tail -1)
     [[ -n "${num}" ]] || break
     ufw --force delete "$num" >/dev/null 2>&1 || break
   done
-else
-  ufw allow OpenSSH
 fi
-ufw --force enable
 
 runuser -u "$CHILLRIG_USER" -- tmux start-server
 if ! runuser -u "$CHILLRIG_USER" -- tmux has-session -t chillrig 2>/dev/null; then

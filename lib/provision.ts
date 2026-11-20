@@ -5,6 +5,7 @@ import { createDnsRecord, deleteDnsRecord } from "@/lib/cloudflare";
 import { renderUserData } from "@/lib/cloud-init";
 import { sendReadyEmail } from "@/lib/email";
 import { parseGitHubRepo } from "@/lib/github";
+import { fallbackNotice, placementPlan } from "@/lib/hetzner-types";
 import {
   createFirewall,
   createServer,
@@ -135,22 +136,34 @@ async function continueLiveProvision(box: Box) {
     CHILLRIG_SLUG: box.slug,
     CHILLRIG_CLOSE_SSH: "1",
   });
-  const preferred = process.env.HETZNER_LOCATION || "fsn1";
-  const locations = preferred === "hel1" ? ["hel1", "fsn1"] : ["fsn1", "hel1"];
+  const plan = placementPlan({
+    types: process.env.HETZNER_SERVER_TYPES,
+    singleType: process.env.HETZNER_SERVER_TYPE,
+    locations: process.env.HETZNER_LOCATIONS,
+    preferredLocation: process.env.HETZNER_LOCATION,
+  });
   let created: Awaited<ReturnType<typeof createServer>> | null = null;
-  let region = locations[0] ?? "fsn1";
+  let placed = plan[0];
   let lastError: unknown = null;
-  for (const location of locations) {
+  for (const attempt of plan) {
     try {
-      created = await createServer({ name: `box-${box.slug}`, userData, location });
-      region = location;
+      created = await createServer({
+        name: `box-${box.slug}`,
+        userData,
+        location: attempt.location,
+        serverType: attempt.serverType,
+      });
+      placed = attempt;
+      const notice = plan[0] ? fallbackNotice(attempt, plan[0]) : null;
+      if (notice) console.warn(notice);
       break;
     } catch (error) {
       lastError = error;
       if (!isCapacityError(error)) break;
+      console.warn(`Hetzner ${attempt.serverType} in ${attempt.location} is unavailable`);
     }
   }
-  if (!created) {
+  if (!created || !placed) {
     box.status = "error";
     box.error = publicError(lastError);
     await store().saveBox(box);
@@ -158,7 +171,8 @@ async function continueLiveProvision(box: Box) {
   }
   box.hetznerServerId = created.id;
   box.ipv4 = created.ipv4;
-  box.region = region;
+  box.region = placed.location;
+  box.serverType = placed.serverType;
   box.status = "provisioning";
   await store().saveBox(box);
   try {
@@ -423,6 +437,7 @@ function freshBox(userId: string, slug: string, subscriptionId: string | null): 
     hetznerFirewallId: null,
     ipv4: null,
     region: process.env.HETZNER_LOCATION || "fsn1",
+    serverType: null,
     appPort: 3000,
     stripeSubscriptionId: subscriptionId,
     dnsRecordId: null,
