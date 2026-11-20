@@ -1,3 +1,4 @@
+import { boxHostname } from "@/lib/hostname";
 import { buildSteps, liveIndex, mockIndex } from "@/lib/progress";
 import type { AccountView, Box, SessionUser, Subscription } from "@/lib/types";
 
@@ -13,7 +14,7 @@ export function toAccountView(input: {
   const { mock, domain, user, subscription, box } = input;
   const now = input.now ?? Date.now();
   const visible = box && box.status !== "destroyed" ? box : null;
-  const hostname = visible ? `${visible.slug}.${domain}` : null;
+  const hostname = visible ? boxHostname(visible, domain) : null;
   const done = visible?.status === "running";
   let index = 0;
   if (visible) {

@@ -47,6 +47,7 @@ export type Box = {
   ipv4: string | null;
   region: string;
   serverType: string | null;
+  hostname: string | null;
   appPort: number;
   stripeSubscriptionId: string | null;
   dnsRecordId: string | null;

@@ -50,11 +50,16 @@ export function route(handler: (request: Request) => Promise<Response>) {
 }
 
 export function requestOrigin(request: Request) {
-  const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
+  const configured = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") || process.env.CHILLRIG_CONTROL_PLANE?.replace(/\/$/, "");
   if (configured) return configured;
-  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "127.0.0.1:43123";
-  const proto = request.headers.get("x-forwarded-proto") ?? "http";
-  return `${proto}://${host}`;
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  if (host) {
+    const proto = request.headers.get("x-forwarded-proto") ?? (host.endsWith(".vercel.app") ? "https" : "http");
+    return `${proto}://${host}`;
+  }
+  const prod = process.env.VERCEL_PROJECT_PRODUCTION_URL?.replace(/^https?:\/\//, "");
+  if (prod) return `https://${prod}`;
+  return "http://127.0.0.1:43123";
 }
 
 export function publicError(error: unknown) {

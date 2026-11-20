@@ -67,11 +67,30 @@ The API token needs permission to create servers, enable backups, and manage fir
 
 The Cloudflare token needs DNS edit on the zone in `CLOUDFLARE_ZONE_ID`. Records are created with `proxied: false`.
 
-### Deploy
+### Deploy on Vercel without a domain
 
-Deploy this Next.js app to Vercel. Set the environment before the first production build so the public Supabase values are available. The VM install script is traced into the server bundle from `install.sh`.
+`vercel.json` marks this as a Next.js app and gives the Stripe webhook, checkout, and ready callback 60 seconds. From the repo:
 
-The first `invoice.payment_failed` marks the subscription past due, emails the subscriber when Resend is configured, and does not delete the VM. The VM is deleted when Stripe sends `customer.subscription.deleted` or the subscription becomes `canceled`, `unpaid`, or `incomplete_expired`. Processed event ids are stored so a webhook retry does not create a second machine.
+```bash
+npx vercel deploy --prod --token "$VERCEL_TOKEN" --yes
+```
+
+Set `CHILLRIG_MOCK=false` for that production deployment. After the first deploy, set `NEXT_PUBLIC_APP_URL` and `CHILLRIG_CONTROL_PLANE` to the stable `https://<project>.vercel.app` origin and redeploy so the VM and Stripe call that host, not a one-off deployment URL. If those two are empty, the app falls back to `VERCEL_PROJECT_PRODUCTION_URL`, then `VERCEL_URL`. Checkout, the Stripe webhook (`/api/webhooks/stripe`), and the box ready callback (`/api/boxes/ready`) use that origin. No custom domain is required.
+
+Leave `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ZONE_ID` unset. Each new machine is named `<ip-with-dashes>.sslip.io` (for example `1-2-3-4.sslip.io`). That name is stored on the box, Caddy requests a Let's Encrypt certificate for it, and the terminal and preview use it. `sslip.io` is a shared domain, so a long test can hit Let's Encrypt's certificate limit for that name. Set `ACME_EMAIL` to a real address.
+
+Required production env: `CHILLRIG_MOCK=false`, `SESSION_SECRET`, `TERMINAL_TOKEN_SECRET`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `HETZNER_API_TOKEN`. For the first sign-in, set `CHILLRIG_EMAIL_LOGIN=1` and leave Google and GitHub unconfigured. Cloudflare and `CHILLRIG_DOMAIN` are optional until you buy a domain. `STRIPE_PORTAL_CONFIGURATION` is optional; the setup script prints it.
+
+Apply the database and auth redirects, then create the test price and webhook:
+
+```bash
+SUPABASE_ACCESS_TOKEN=sbp_... SUPABASE_PROJECT_REF=... APP_URL=https://<project>.vercel.app npm run supabase-setup
+STRIPE_SECRET_KEY=sk_test_... APP_URL=https://<project>.vercel.app npm run stripe-setup
+```
+
+`scripts/supabase-setup.sh` runs `supabase/migrations/0001_init.sql` through `0004_hostname.sql` with the Management API and sets the auth site URL plus `/auth/callback`. `scripts/stripe-setup.ts` creates the €29/month VAT-inclusive price, a webhook for the four billing events, and a Customer Portal configuration. It prints `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET`, and `STRIPE_PORTAL_CONFIGURATION`. It refuses a live secret key. Re-running it replaces the webhook for that URL so a new signing secret can be printed.
+
+The VM install script is traced into the server bundle from `install.sh`. The first `invoice.payment_failed` marks the subscription past due, emails the subscriber when Resend is configured, and does not delete the VM. The VM is deleted when Stripe sends `customer.subscription.deleted` or the subscription becomes `canceled`, `unpaid`, or `incomplete_expired`. Processed event ids are stored so a webhook retry does not create a second machine.
 
 ### Email
 
@@ -102,7 +121,8 @@ sudo \
 - `app/` control-plane UI and HTTP routes
 - `lib/` auth, billing, provisioning, and the mock database
 - `install.sh` box bootstrap
-- `supabase/migrations/0001_init.sql` Postgres schema
+- `supabase/migrations/` Postgres schema (`0001` through `0004`)
+- `scripts/supabase-setup.sh` and `scripts/stripe-setup.ts` for a first live deploy
 
 Mock state is stored in `.data/` (or `/tmp/chillrig` on Vercel). It is gitignored.
 

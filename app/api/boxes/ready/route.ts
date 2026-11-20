@@ -2,6 +2,8 @@ import { connection } from "next/server";
 import { json } from "@/lib/http";
 import { completeReadyToken } from "@/lib/provision";
 
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   await connection();
   const header = request.headers.get("authorization") ?? "";

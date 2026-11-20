@@ -10,9 +10,11 @@ export const POST = route(async (request) => {
   const user = await requireUser();
   const profile = await store().getProfile(user.id);
   if (!profile?.stripeCustomerId) throw new HttpError(400, "No billing account yet");
+  const configuration = process.env.STRIPE_PORTAL_CONFIGURATION;
   const portal = await getStripe().billingPortal.sessions.create({
     customer: profile.stripeCustomerId,
     return_url: `${requestOrigin(request)}/dashboard`,
+    ...(configuration ? { configuration } : {}),
   });
   return json({ url: portal.url });
 });

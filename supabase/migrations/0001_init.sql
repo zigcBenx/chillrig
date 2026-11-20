@@ -53,11 +53,14 @@ alter table public.subscriptions enable row level security;
 alter table public.boxes enable row level security;
 alter table public.stripe_events enable row level security;
 
+drop policy if exists "read own profile" on public.profiles;
 create policy "read own profile" on public.profiles
   for select to authenticated using (auth.uid() = id);
 
+drop policy if exists "read own subscription" on public.subscriptions;
 create policy "read own subscription" on public.subscriptions
   for select to authenticated using (auth.uid() = user_id);
 
+drop policy if exists "read own box" on public.boxes;
 create policy "read own box" on public.boxes
   for select to authenticated using (auth.uid() = user_id);

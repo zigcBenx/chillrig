@@ -5,6 +5,7 @@ import { createDnsRecord, deleteDnsRecord } from "@/lib/cloudflare";
 import { renderUserData } from "@/lib/cloud-init";
 import { sendReadyEmail } from "@/lib/email";
 import { parseGitHubRepo } from "@/lib/github";
+import { boxHostname, cloudflareConfigured, sslipHostname } from "@/lib/hostname";
 import { fallbackNotice, maxMonthlyEur, placementPlan } from "@/lib/hetzner-types";
 import {
   createFirewall,
@@ -112,8 +113,9 @@ async function continueLiveProvision(box: Box) {
   if (!plane.startsWith("https://")) {
     throw new HttpError(500, "CHILLRIG_CONTROL_PLANE must be an https URL");
   }
+  const sslip = !cloudflareConfigured();
   const domain = domainName();
-  if (!/^[a-z0-9.-]+$/.test(domain) || !domain.includes(".")) {
+  if (!sslip && (!/^[a-z0-9.-]+$/.test(domain) || !domain.includes("."))) {
     throw new HttpError(500, "CHILLRIG_DOMAIN is not a hostname");
   }
   const token = signPayload(
@@ -128,9 +130,9 @@ async function continueLiveProvision(box: Box) {
   box.provisionTokenHash = sha256(token);
   await store().saveBox(box);
   const userData = renderUserData({
-    CHILLRIG_DOMAIN: `${box.slug}.${domain}`,
+    ...(sslip ? { CHILLRIG_SSLIP: "1" } : { CHILLRIG_DOMAIN: `${box.slug}.${domain}` }),
     CHILLRIG_CONTROL_PLANE: plane,
-    CHILLRIG_ACME_EMAIL: process.env.ACME_EMAIL || `admin@${domain}`,
+    CHILLRIG_ACME_EMAIL: process.env.ACME_EMAIL || (sslip ? "admin@sslip.io" : `admin@${domain}`),
     CHILLRIG_READY_URL: `${plane}/api/boxes/ready`,
     CHILLRIG_READY_TOKEN: token,
     CHILLRIG_APP_PORT: String(box.appPort),
@@ -197,7 +199,15 @@ async function continueLiveProvision(box: Box) {
     box.hetznerFirewallId = await createFirewall(`fw-${box.slug}`, created.id);
     await store().saveBox(box);
     if (!box.ipv4) throw new Error("The machine has no IPv4 address");
-    box.dnsRecordId = await createDnsRecord(box.slug, box.ipv4);
+    if (sslip) {
+      const host = sslipHostname(box.ipv4);
+      if (!host) throw new Error("The machine IPv4 cannot be used as a hostname");
+      box.hostname = host;
+      box.dnsRecordId = null;
+    } else {
+      box.hostname = `${box.slug}.${domain}`;
+      box.dnsRecordId = await createDnsRecord(box.slug, box.ipv4);
+    }
     box.error = null;
     await store().saveBox(box);
   } catch (error) {
@@ -255,7 +265,7 @@ async function syncLive(id: string) {
       await store().saveBox(box);
     }
     if (box.status === "provisioning" && server.status === "running" && box.dnsRecordId) {
-      if (await probeReady(`${box.slug}.${domainName()}`)) {
+      if (await probeReady(boxHostname(box, domainName()))) {
         await finishReady(box);
       } else if (Date.now() - new Date(box.createdAt).getTime() > PROVISION_TIMEOUT_MS) {
         box.status = "error";
@@ -290,7 +300,7 @@ async function finishReady(box: Box) {
   const profile = await store().getProfile(ready.userId);
   if (!profile) return;
   try {
-    await sendReadyEmail(profile, `${ready.slug}.${domainName()}`);
+    await sendReadyEmail(profile, boxHostname(ready, domainName()));
   } catch {
     // The box is ready even if the optional email fails.
   }
@@ -352,7 +362,7 @@ export async function cloneOnBox(userId: string, rawUrl: string) {
     return box.githubClone;
   }
   const ticket = boxTicket(userId, box);
-  const response = await fetch(`https://${box.slug}.${domainName()}/_chillrig/clone?ticket=${encodeURIComponent(ticket)}`, {
+  const response = await fetch(`https://${boxHostname(box, domainName())}/_chillrig/clone?ticket=${encodeURIComponent(ticket)}`, {
     method: "POST",
     redirect: "manual",
     headers: { "content-type": "application/json", "x-chillrig-ticket": ticket },
@@ -373,7 +383,7 @@ export async function setBoxPort(userId: string, value: unknown) {
   const box = await runningBox(userId);
   if (!isMockMode()) {
     const ticket = boxTicket(userId, box);
-    const response = await fetch(`https://${box.slug}.${domainName()}/_chillrig/port?ticket=${encodeURIComponent(ticket)}`, {
+    const response = await fetch(`https://${boxHostname(box, domainName())}/_chillrig/port?ticket=${encodeURIComponent(ticket)}`, {
       method: "POST",
       redirect: "manual",
       headers: { "content-type": "application/json", "x-chillrig-ticket": ticket },
@@ -393,7 +403,7 @@ export function issueBoxTicket(userId: string, box: Box) {
   }
   return {
     ticket: boxTicket(userId, box),
-    hostname: `${box.slug}.${domainName()}`,
+    hostname: boxHostname(box, domainName()),
     wsPath: "/ttyd/ws",
   };
 }
@@ -401,10 +411,11 @@ export function issueBoxTicket(userId: string, box: Box) {
 export async function verifyBoxTicket(token: string, host: string) {
   const payload = readBoxTicket(token);
   if (!payload) return false;
-  const hostname = host.split(":")[0]?.toLowerCase();
-  if (hostname !== `${payload.slug}.${domainName()}`) return false;
   const box = await store().getBoxById(payload.boxId);
   if (!box || box.userId !== payload.sub || box.slug !== payload.slug) return false;
+  const hostname = host.split(":")[0]?.toLowerCase();
+  const expected = boxHostname(box, domainName()).toLowerCase();
+  if (hostname !== expected) return false;
   return box.status === "running" || box.status === "provisioning";
 }
 
@@ -456,6 +467,7 @@ function freshBox(userId: string, slug: string, subscriptionId: string | null): 
     ipv4: null,
     region: process.env.HETZNER_LOCATION || "fsn1",
     serverType: null,
+    hostname: null,
     appPort: 3000,
     stripeSubscriptionId: subscriptionId,
     dnsRecordId: null,

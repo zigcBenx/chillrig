@@ -34,6 +34,7 @@ type BoxRow = {
   ipv4: string | null;
   region: string;
   server_type: string | null;
+  hostname: string | null;
   app_port: number;
   stripe_subscription_id: string | null;
   dns_record_id: string | null;
@@ -58,6 +59,7 @@ function mapBox(row: BoxRow): Box {
     ipv4: row.ipv4,
     region: row.region,
     serverType: row.server_type,
+    hostname: row.hostname,
     appPort: row.app_port,
     stripeSubscriptionId: row.stripe_subscription_id,
     dnsRecordId: row.dns_record_id,
@@ -83,6 +85,7 @@ function toRow(box: Box): BoxRow {
     ipv4: box.ipv4,
     region: box.region,
     server_type: box.serverType,
+    hostname: box.hostname,
     app_port: box.appPort,
     stripe_subscription_id: box.stripeSubscriptionId,
     dns_record_id: box.dnsRecordId,

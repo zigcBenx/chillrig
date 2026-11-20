@@ -6,11 +6,26 @@ export function domainName() {
 }
 
 export function appBaseUrl() {
-  return (process.env.NEXT_PUBLIC_APP_URL || process.env.CHILLRIG_CONTROL_PLANE || "").replace(/\/$/, "");
+  return publicAppUrl();
 }
 
 export function controlPlaneUrl() {
-  return (process.env.CHILLRIG_CONTROL_PLANE || process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/$/, "");
+  return publicAppUrl();
+}
+
+export function emailLoginEnabled() {
+  const flag = process.env.CHILLRIG_EMAIL_LOGIN?.trim().toLowerCase();
+  return flag === "1" || flag === "true" || flag === "yes";
+}
+
+function publicAppUrl() {
+  const explicit = (process.env.CHILLRIG_CONTROL_PLANE || process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/$/, "");
+  if (explicit) return explicit;
+  const prod = process.env.VERCEL_PROJECT_PRODUCTION_URL?.replace(/^https?:\/\//, "");
+  if (prod) return `https://${prod}`;
+  const vercel = process.env.VERCEL_URL?.replace(/^https?:\/\//, "");
+  if (vercel) return `https://${vercel}`;
+  return "";
 }
 
 export function supabaseUrl() {

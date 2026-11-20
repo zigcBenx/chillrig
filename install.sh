@@ -34,7 +34,7 @@ if [[ -n "$CHILLRIG_CONTROL_PLANE" && "$CHILLRIG_CONTROL_PLANE" != https://* ]];
   echo "CHILLRIG_CONTROL_PLANE must start with https://" >&2
   exit 1
 fi
-if [[ -n "$CHILLRIG_CONTROL_PLANE" && -z "$CHILLRIG_DOMAIN" ]]; then
+if [[ -n "$CHILLRIG_CONTROL_PLANE" && -z "$CHILLRIG_DOMAIN" && "${CHILLRIG_SSLIP:-}" != "1" ]]; then
   echo "CHILLRIG_DOMAIN is required for a managed box." >&2
   exit 1
 fi
@@ -228,6 +228,27 @@ cat > /etc/chillrig/env << EOF
 CHILLRIG_USER=${CHILLRIG_USER}
 EOF
 chmod 0644 /etc/chillrig/env
+
+# No Cloudflare zone: the VM names itself <ip-with-dashes>.sslip.io so Let's Encrypt
+# can issue a certificate without any DNS records of our own.
+if [[ "${CHILLRIG_SSLIP:-}" == "1" ]]; then
+  public_ip=""
+  if [[ -z "$public_ip" ]]; then
+    public_ip=$(curl -fsS --max-time 3 http://169.254.169.254/hetzner/v1/metadata/public-ipv4 2>/dev/null | tr -d '[:space:]' || true)
+  fi
+  if [[ ! "$public_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    public_ip=$(curl -4 -fsS --max-time 8 https://ipv4.icanhazip.com 2>/dev/null | tr -d '[:space:]' || true)
+  fi
+  if [[ ! "$public_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    echo "Could not detect a public IPv4 for sslip.io." >&2
+    exit 1
+  fi
+  CHILLRIG_DOMAIN="${public_ip//./-}.sslip.io"
+  echo "Using hostname ${CHILLRIG_DOMAIN}"
+fi
+if [[ -z "${CHILLRIG_ACME_EMAIL:-}" && -n "${CHILLRIG_DOMAIN:-}" ]]; then
+  CHILLRIG_ACME_EMAIL="admin@${CHILLRIG_DOMAIN}"
+fi
 
 # The bcrypt hash contains '$'. Write it from Python so no shell heredoc can
 # expand '$' or '$$'. Caddy 2 accepts the raw hash from `caddy hash-password`.

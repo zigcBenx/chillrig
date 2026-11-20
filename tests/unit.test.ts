@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { subscriptionAllowsBox, subscriptionEndsBox } from "../lib/billing-policy";
 import { fallbackNotice, isPricierThanPlan, placementPlan, PLAN_MONTHLY_EUR } from "../lib/hetzner-types";
 import { renderUserData } from "../lib/cloud-init";
+import { boxHostname, sslipHostname } from "../lib/hostname";
 import { parseGitHubRepo } from "../lib/github";
 import { buildSteps, mockIndex, mockIsReady } from "../lib/progress";
 import { parseAppPort } from "../lib/ports";
@@ -93,10 +94,18 @@ describe("account view", () => {
       lastSyncAt: null,
       backupEnabled: false,
       serverType: null,
+      hostname: null,
     };
     const view = toAccountView({ mock: true, domain: "chillrig.test", user, subscription: null, box });
     assert.equal(view.previewUrl, null);
     assert.equal(view.box?.hostname, "calm-otter.chillrig.test");
+    assert.equal(sslipHostname("1.2.3.4"), "1-2-3-4.sslip.io");
+    assert.equal(sslipHostname("256.1.1.1"), null);
+    assert.equal(sslipHostname("not-an-ip"), null);
+    assert.equal(boxHostname({ hostname: "1-2-3-4.sslip.io", slug: "calm-otter" }, "chillrig.test"), "1-2-3-4.sslip.io");
+    assert.equal(boxHostname({ hostname: null, slug: "calm-otter" }, "chillrig.test"), "calm-otter.chillrig.test");
+    assert.match(readFileSync("install.sh", "utf8"), /CHILLRIG_SSLIP/);
+    assert.match(readFileSync("install.sh", "utf8"), /sslip\.io/);
     assert.ok(view.steps.every((step) => step.state === "done"));
   });
 });

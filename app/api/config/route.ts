@@ -1,5 +1,5 @@
 import { connection } from "next/server";
-import { supabaseAnonKey, supabaseUrl } from "@/lib/config";
+import { emailLoginEnabled, supabaseAnonKey, supabaseUrl } from "@/lib/config";
 import { json } from "@/lib/http";
 import { isMockMode } from "@/lib/mode";
 
@@ -8,6 +8,7 @@ export async function GET() {
   const mock = isMockMode();
   return json({
     mock,
+    emailLogin: emailLoginEnabled(),
     supabaseUrl: mock ? null : supabaseUrl() || null,
     supabaseAnonKey: mock ? null : supabaseAnonKey() || null,
   });
