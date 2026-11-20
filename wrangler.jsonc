@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "chillrig",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "chillrig"
+    }
+  ],
+  "observability": { "enabled": true },
+  // Non-secret config. Secrets go in with `wrangler secret bulk`, never here.
+  "vars": {
+    "CHILLRIG_MOCK": "false",
+    "CHILLRIG_EMAIL_LOGIN": "1",
+    "HETZNER_MAX_MONTHLY_EUR": "12",
+    "NEXT_PUBLIC_APP_URL": "https://chillrig.jqfdpr2e.workers.dev",
+    "CHILLRIG_CONTROL_PLANE": "https://chillrig.jqfdpr2e.workers.dev"
+  }
+}

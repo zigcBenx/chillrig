@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { controlPlaneUrl, domainName, ticketSecret } from "@/lib/config";
 import { createDnsRecord, deleteDnsRecord } from "@/lib/cloudflare";
+import { runInBackground } from "@/lib/background";
 import { renderUserData } from "@/lib/cloud-init";
 import { sendReadyEmail } from "@/lib/email";
 import { parseGitHubRepo } from "@/lib/github";
@@ -10,7 +11,7 @@ import { fallbackNotice, maxMonthlyEur, placementPlan } from "@/lib/hetzner-type
 import {
   createFirewall,
   createServer,
-  deleteFirewall,
+  deleteFirewallWhenFree,
   deleteServer,
   enableBackup,
   getServer,
@@ -85,7 +86,7 @@ async function ensureLiveBox(userId: string, subscriptionId: string | null) {
     if (existing.hetznerServerId) return existing;
     const age = Date.now() - new Date(existing.createdAt).getTime();
     if (age < RESUME_AFTER_MS) return existing;
-    return continueLiveProvision(existing);
+    return launchLiveProvision(existing);
   }
   if (existing && (existing.status === "error" || existing.status === "destroyed")) {
     await destroyResources(existing);
@@ -105,7 +106,31 @@ async function ensureLiveBox(userId: string, subscriptionId: string | null) {
       throw error;
     }
   }
-  return continueLiveProvision(box);
+  return launchLiveProvision(box);
+}
+
+/**
+ * Create the Hetzner machine after the response is sent (ctx.waitUntil on Workers).
+ * The box row already exists with status "provisioning", so the caller can return
+ * right away. If the worker is cut off before a server id is saved, syncBox resumes
+ * it after RESUME_AFTER_MS. Hetzner rejects a second server with the same name, so a
+ * resume can never create two machines for one box.
+ */
+function launchLiveProvision(box: Box) {
+  runInBackground("provision", async () => {
+    try {
+      await continueLiveProvision(box);
+    } catch (error) {
+      const current = await store().getBoxById(box.id);
+      if (current && current.status === "provisioning" && !current.hetznerServerId) {
+        current.status = "error";
+        current.error = publicError(error);
+        await store().saveBox(current);
+      }
+      throw error;
+    }
+  });
+  return box;
 }
 
 async function continueLiveProvision(box: Box) {
@@ -146,6 +171,12 @@ async function continueLiveProvision(box: Box) {
     preferredLocation: process.env.HETZNER_LOCATION,
     maxMonthlyEur: maxMonthlyEur(process.env.HETZNER_MAX_MONTHLY_EUR),
   });
+  // Firewall first (ports 80/443 + ICMP), then pass it to the create call so the box is
+  // never reachable unfiltered and no post-create attach can race the network setup.
+  if (!box.hetznerFirewallId) {
+    box.hetznerFirewallId = await createFirewall(`fw-${box.slug}`);
+    await store().saveBox(box);
+  }
   let created: Awaited<ReturnType<typeof createServer>> | null = null;
   let placed = plan[0];
   let lastError: unknown = null;
@@ -156,6 +187,7 @@ async function continueLiveProvision(box: Box) {
         userData,
         location: attempt.location,
         serverType: attempt.serverType,
+        firewallIds: [box.hetznerFirewallId],
       });
       placed = attempt;
       const notice = plan[0] ? fallbackNotice(attempt, plan[0]) : null;
@@ -196,8 +228,6 @@ async function continueLiveProvision(box: Box) {
   }
   await store().saveBox(box);
   try {
-    box.hetznerFirewallId = await createFirewall(`fw-${box.slug}`, created.id);
-    await store().saveBox(box);
     if (!box.ipv4) throw new Error("The machine has no IPv4 address");
     if (sslip) {
       const host = sslipHostname(box.ipv4);
@@ -238,7 +268,18 @@ export async function syncBox(userId: string) {
     if (Date.now() - last < 60_000) return box;
     const claimed = await store().claimSync(box.id, box.lastSyncAt);
     if (!claimed) return store().getBoxByUser(userId);
-    return continueLiveProvision(box);
+    const fresh = await store().getBoxById(box.id);
+    return fresh ? launchLiveProvision(fresh) : box;
+  }
+  if (box.status === "provisioning" && !box.hetznerServerId) {
+    // A background create that never saved a server id (worker cut off). Retry, at most
+    // once per RESUME_AFTER_MS, guarded by claimSync so only one request does it.
+    const started = Math.max(new Date(box.createdAt).getTime(), box.lastSyncAt ? new Date(box.lastSyncAt).getTime() : 0);
+    if (Date.now() - started < RESUME_AFTER_MS) return box;
+    const claimed = await store().claimSync(box.id, box.lastSyncAt);
+    if (!claimed) return store().getBoxByUser(userId);
+    const fresh = await store().getBoxById(box.id);
+    return fresh ? launchLiveProvision(fresh) : box;
   }
   if (box.status !== "provisioning" && box.status !== "running") return box;
   const staleMs = box.status === "provisioning" ? 3000 : 60_000;
@@ -260,11 +301,13 @@ async function syncLive(id: string) {
       await store().saveBox(box);
       return box;
     }
-    if (!box.dnsRecordId && box.ipv4 && box.status === "provisioning") {
+    const dns = cloudflareConfigured();
+    if (dns && !box.dnsRecordId && box.ipv4 && box.status === "provisioning") {
       box.dnsRecordId = await createDnsRecord(box.slug, box.ipv4);
       await store().saveBox(box);
     }
-    if (box.status === "provisioning" && server.status === "running" && box.dnsRecordId) {
+    // sslip.io hostnames need no DNS record, so only wait for one when Cloudflare is configured.
+    if (box.status === "provisioning" && server.status === "running" && (!dns || box.dnsRecordId) && box.hostname) {
       if (await probeReady(boxHostname(box, domainName()))) {
         await finishReady(box);
       } else if (Date.now() - new Date(box.createdAt).getTime() > PROVISION_TIMEOUT_MS) {
@@ -348,7 +391,12 @@ export async function destroyUserBox(userId: string) {
 
 async function destroyResources(box: Box) {
   if (box.hetznerServerId) await deleteServer(box.hetznerServerId);
-  if (box.hetznerFirewallId) await deleteFirewall(box.hetznerFirewallId);
+  if (box.hetznerFirewallId) {
+    // The firewall is released a few seconds after the server is gone. It costs nothing,
+    // so finish this after the response instead of holding the webhook open.
+    const firewallId = box.hetznerFirewallId;
+    runInBackground("firewall cleanup", () => deleteFirewallWhenFree(firewallId));
+  }
   if (box.dnsRecordId) await deleteDnsRecord(box.dnsRecordId);
 }
 

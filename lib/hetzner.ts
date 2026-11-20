@@ -36,6 +36,7 @@ export async function createServer(input: {
   userData: string;
   location: string;
   serverType: string;
+  firewallIds?: number[];
 }) {
   const data = await hetzner("/servers", {
     method: "POST",
@@ -47,6 +48,9 @@ export async function createServer(input: {
       start_after_create: true,
       user_data: input.userData,
       public_net: { enable_ipv4: true, enable_ipv6: true },
+      // Attach the firewall at create time. Attaching it afterwards fails until the
+      // server's public interface exists ("no public network interfaces found").
+      ...(input.firewallIds?.length ? { firewalls: input.firewallIds.map((firewall) => ({ firewall })) } : {}),
       labels: {
         chillrig: "1",
         slug: input.name.replace(/^box-/, ""),
@@ -88,7 +92,7 @@ export async function deleteServer(id: number) {
   }
 }
 
-export async function createFirewall(name: string, serverId: number) {
+export async function createFirewall(name: string, serverId?: number) {
   const data = await hetzner("/firewalls", {
     method: "POST",
     body: JSON.stringify({
@@ -98,7 +102,7 @@ export async function createFirewall(name: string, serverId: number) {
         { direction: "in", protocol: "tcp", port: "80", source_ips: ["0.0.0.0/0", "::/0"] },
         { direction: "in", protocol: "tcp", port: "443", source_ips: ["0.0.0.0/0", "::/0"] },
       ],
-      apply_to: [{ type: "server", server: { id: serverId } }],
+      ...(serverId ? { apply_to: [{ type: "server", server: { id: serverId } }] } : {}),
     }),
   });
   const firewall = data.firewall as { id?: number } | undefined;
@@ -115,6 +119,19 @@ export async function deleteFirewall(id: number) {
   });
   if (response.status === 404) return;
   if (!response.ok) throw new Error("Could not delete the firewall");
+}
+
+/** A firewall stays "in use" for a few seconds after its server is deleted. */
+export async function deleteFirewallWhenFree(id: number, attempts = 10) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await deleteFirewall(id);
+      return;
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }
 }
 
 export function isCapacityError(error: unknown) {

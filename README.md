@@ -88,9 +88,22 @@ SUPABASE_ACCESS_TOKEN=sbp_... SUPABASE_PROJECT_REF=... APP_URL=https://<project>
 STRIPE_SECRET_KEY=sk_test_... APP_URL=https://<project>.vercel.app npm run stripe-setup
 ```
 
-`scripts/supabase-setup.sh` runs `supabase/migrations/0001_init.sql` through `0004_hostname.sql` with the Management API and sets the auth site URL plus `/auth/callback`. `scripts/stripe-setup.ts` creates the €29/month VAT-inclusive price, a webhook for the four billing events, and a Customer Portal configuration. It prints `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET`, and `STRIPE_PORTAL_CONFIGURATION`. It refuses a live secret key. Re-running it replaces the webhook for that URL so a new signing secret can be printed.
+`scripts/supabase-setup.sh` runs `supabase/migrations/0001_init.sql` through `0005_grants.sql` with the Management API and sets the auth site URL plus `/auth/callback`. `scripts/stripe-setup.ts` creates the €29/month VAT-inclusive price, a webhook for the four billing events, and a Customer Portal configuration. It prints `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET`, and `STRIPE_PORTAL_CONFIGURATION`. It refuses a live secret key. Re-running it replaces the webhook for that URL so a new signing secret can be printed.
 
 The VM install script is traced into the server bundle from `install.sh`. The first `invoice.payment_failed` marks the subscription past due, emails the subscriber when Resend is configured, and does not delete the VM. The VM is deleted when Stripe sends `customer.subscription.deleted` or the subscription becomes `canceled`, `unpaid`, or `incomplete_expired`. Processed event ids are stored so a webhook retry does not create a second machine.
+
+### Deploy on Cloudflare Workers without a domain
+
+`wrangler.jsonc` and `open-next.config.ts` run the app on Workers through `@opennextjs/cloudflare` (free `*.workers.dev` URL, worker is about 1.8 MiB gzipped). `install.sh` is embedded at build time by `scripts/embed-install.mjs`, because Workers have no filesystem.
+
+```bash
+export CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=...
+export NEXT_PUBLIC_APP_URL=https://chillrig.<subdomain>.workers.dev   # inlined at build time
+npm run deploy
+npx wrangler secret bulk secrets.json   # SUPABASE_*, STRIPE_*, SESSION_SECRET, TERMINAL_TOKEN_SECRET, HETZNER_API_TOKEN
+```
+
+Non-secret vars (`CHILLRIG_MOCK`, `CHILLRIG_EMAIL_LOGIN`, the app URL) live in `wrangler.jsonc`. Never put secrets there.
 
 ### Email
 
@@ -121,7 +134,7 @@ sudo \
 - `app/` control-plane UI and HTTP routes
 - `lib/` auth, billing, provisioning, and the mock database
 - `install.sh` box bootstrap
-- `supabase/migrations/` Postgres schema (`0001` through `0004`)
+- `supabase/migrations/` Postgres schema (`0001` through `0005`)
 - `scripts/supabase-setup.sh` and `scripts/stripe-setup.ts` for a first live deploy
 
 Mock state is stored in `.data/` (or `/tmp/chillrig` on Vercel). It is gitignored.

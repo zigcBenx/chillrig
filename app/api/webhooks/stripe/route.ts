@@ -3,7 +3,7 @@ import { subscriptionEndsBox } from "@/lib/billing-policy";
 import { sendPaymentFailedEmail } from "@/lib/email";
 import { json } from "@/lib/http";
 import { destroyUserBox, markSubscription, activateAndProvision } from "@/lib/provision";
-import { getStripe, stripeId } from "@/lib/stripe-client";
+import { getStripe, stripeId, webCrypto } from "@/lib/stripe-client";
 import { store } from "@/lib/store";
 import type { SubscriptionStatus } from "@/lib/types";
 
@@ -12,11 +12,13 @@ export const maxDuration = 60;
 export async function POST(request: Request) {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   const signature = request.headers.get("stripe-signature");
-  if (!secret || !signature) return json({ error: "Webhook is not configured" }, 500);
+  if (!secret) return json({ error: "Webhook is not configured" }, 500);
+  if (!signature) return json({ error: "Missing signature" }, 400);
+  // Raw body, verified with Web Crypto so it also runs on Cloudflare Workers.
   const body = await request.text();
   let event: Stripe.Event;
   try {
-    event = getStripe().webhooks.constructEvent(body, signature, secret);
+    event = await getStripe().webhooks.constructEventAsync(body, signature, secret, undefined, webCrypto);
   } catch {
     return json({ error: "Invalid signature" }, 400);
   }

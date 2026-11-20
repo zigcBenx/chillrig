@@ -1,5 +1,5 @@
 import { connection } from "next/server";
-import { emailLoginEnabled, supabaseAnonKey, supabaseUrl } from "@/lib/config";
+import { emailCodeEnabled, emailLoginEnabled, oauthEnabled, supabaseAnonKey, supabaseUrl } from "@/lib/config";
 import { json } from "@/lib/http";
 import { isMockMode } from "@/lib/mode";
 
@@ -9,6 +9,8 @@ export async function GET() {
   return json({
     mock,
     emailLogin: emailLoginEnabled(),
+    emailCode: emailCodeEnabled(),
+    oauth: mock || oauthEnabled() || !emailLoginEnabled(),
     supabaseUrl: mock ? null : supabaseUrl() || null,
     supabaseAnonKey: mock ? null : supabaseAnonKey() || null,
   });

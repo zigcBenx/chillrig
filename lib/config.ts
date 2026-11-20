@@ -18,6 +18,22 @@ export function emailLoginEnabled() {
   return flag === "1" || flag === "true" || flag === "yes";
 }
 
+/** Show Google and GitHub buttons. Off until those Supabase providers are set up. */
+export function oauthEnabled() {
+  const flag = process.env.CHILLRIG_OAUTH?.trim().toLowerCase();
+  return flag === "1" || flag === "true" || flag === "yes";
+}
+
+/**
+ * Show the "enter the code" box after an email link is sent. Off by default: Supabase's
+ * built-in mailer only sends a link, and free projects cannot add {{ .Token }} to the
+ * template. Turn on once a custom SMTP provider and a template with the code exist.
+ */
+export function emailCodeEnabled() {
+  const flag = process.env.CHILLRIG_EMAIL_CODE?.trim().toLowerCase();
+  return flag === "1" || flag === "true" || flag === "yes";
+}
+
 function publicAppUrl() {
   const explicit = (process.env.CHILLRIG_CONTROL_PLANE || process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/$/, "");
   if (explicit) return explicit;

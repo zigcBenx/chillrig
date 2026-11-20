@@ -91,11 +91,16 @@ async function portal() {
   return created.id;
 }
 
-const made = await product();
-const monthly = await price(made.id);
-const secret = await webhook();
-const configuration = await portal();
+async function main() {
+  const made = await product();
+  const monthly = await price(made.id);
+  const secret = await webhook();
+  const configuration = await portal();
 
-console.log(`STRIPE_PRICE_ID=${monthly.id}`);
-console.log(`STRIPE_WEBHOOK_SECRET=${secret}`);
-console.log(`STRIPE_PORTAL_CONFIGURATION=${configuration}`);
+  console.log(`STRIPE_PRICE_ID=${monthly.id}`);
+  console.log(`STRIPE_WEBHOOK_SECRET=${secret}`);
+  console.log(`STRIPE_PORTAL_CONFIGURATION=${configuration}`);
+}
+
+// No top-level await: tsx runs this file as CommonJS.
+main().catch((error) => fail(error instanceof Error ? error.message : String(error)));

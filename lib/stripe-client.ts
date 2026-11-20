@@ -4,10 +4,18 @@ import { HttpError } from "@/lib/http";
 
 let client: Stripe | null = null;
 
+export const webCrypto = Stripe.createSubtleCryptoProvider();
+
 export function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) throw new HttpError(500, "Stripe is not configured");
-  if (!client) client = new Stripe(key, { appInfo: { name: "Chillrig", version: "0.1.0" } });
+  // The fetch client works on Node and on Cloudflare Workers.
+  if (!client) {
+    client = new Stripe(key, {
+      appInfo: { name: "Chillrig", version: "0.1.0" },
+      httpClient: Stripe.createFetchHttpClient(),
+    });
+  }
   return client;
 }
 

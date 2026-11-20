@@ -10,6 +10,8 @@ import { useEffect, useState, useSyncExternalStore, type FormEvent } from "react
 type Config = {
   mock: boolean;
   emailLogin: boolean;
+  emailCode?: boolean;
+  oauth?: boolean;
   supabaseUrl: string | null;
   supabaseAnonKey: string | null;
 };
@@ -22,9 +24,10 @@ export function LoginView() {
   const router = useRouter();
   const [config, setConfig] = useState<Config | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<"google" | "github" | "email" | "code" | null>(null);
+  const [pending, setPending] = useState<"google" | "github" | "email" | "code" | "password" | null>(null);
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
   const [sent, setSent] = useState(false);
   const urlError = useSyncExternalStore(
     subscribe,
@@ -83,9 +86,50 @@ export function LoginView() {
     }
   }
 
-  async function sendEmail(event: FormEvent) {
+  // Email + password works without sending any email (Supabase auto-confirms new users),
+  // so sign-in never hits the built-in mailer's hourly limit. One button: sign in, or
+  // create the account if this email is new.
+  async function continueWithPassword(event: FormEvent) {
     event.preventDefault();
     if (!config) return;
+    if (config.mock) return sendEmail();
+    if (!config.supabaseUrl || !config.supabaseAnonKey) {
+      setError("Sign-in is not configured");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Use at least 8 characters");
+      return;
+    }
+    setPending("password");
+    setError(null);
+    try {
+      const supabase = createBrowserSupabase(config.supabaseUrl, config.supabaseAnonKey);
+      const address = email.trim();
+      const signedIn = await supabase.auth.signInWithPassword({ email: address, password });
+      if (signedIn.error) {
+        const created = await supabase.auth.signUp({ email: address, password });
+        const taken =
+          created.error?.code === "user_already_exists" ||
+          (created.data.user && (created.data.user.identities?.length ?? 0) === 0);
+        if (taken) throw new Error("Wrong password");
+        if (created.error || !created.data.session) throw new Error("Sign-in failed");
+      }
+      router.push(nextPath());
+      router.refresh();
+    } catch (failure) {
+      setError(failure instanceof Error && failure.message === "Wrong password" ? "Wrong password" : "Sign-in failed");
+      setPending(null);
+    }
+  }
+
+  async function sendEmail(event?: FormEvent) {
+    event?.preventDefault();
+    if (!config) return;
+    if (!email.trim()) {
+      setError("Enter your email");
+      return;
+    }
     setPending("email");
     setError(null);
     try {
@@ -114,7 +158,7 @@ export function LoginView() {
       setSent(true);
       setPending(null);
     } catch {
-      setError("Could not send the sign-in email");
+      setError("Email is busy right now. Use a password instead.");
       setPending(null);
     }
   }
@@ -145,14 +189,18 @@ export function LoginView() {
       <div className="rise glass w-full max-w-sm px-7 py-10 text-center">
         <h1 className="headline text-3xl">Sign in</h1>
         <div className="mt-8 grid gap-3">
-          <Button disabled={!config || pending !== null} onClick={() => void signIn("google")}>
-            Google
-          </Button>
-          <Button variant="ghost" disabled={!config || pending !== null} onClick={() => void signIn("github")}>
-            GitHub
-          </Button>
+          {config?.oauth ? (
+            <>
+              <Button disabled={pending !== null} onClick={() => void signIn("google")}>
+                Google
+              </Button>
+              <Button variant="ghost" disabled={pending !== null} onClick={() => void signIn("github")}>
+                GitHub
+              </Button>
+            </>
+          ) : null}
           {config?.emailLogin ? (
-            <form className="mt-2 grid gap-3 text-left" onSubmit={(event) => void sendEmail(event)}>
+            <form className={`${config.oauth ? "mt-2 " : ""}grid gap-3 text-left`} onSubmit={(event) => void continueWithPassword(event)}>
               <Input
                 type="email"
                 name="email"
@@ -162,13 +210,29 @@ export function LoginView() {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
               />
-              <Button type="submit" variant="ghost" disabled={pending !== null}>
+              <Input
+                type="password"
+                name="password"
+                autoComplete="current-password"
+                placeholder="Password"
+                minLength={8}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+              <Button type="submit" disabled={pending !== null}>
+                Continue
+              </Button>
+              <Button type="button" variant="ghost" disabled={pending !== null} onClick={() => void sendEmail()}>
                 Email link
               </Button>
-              {sent ? <p className="muted text-center text-sm">Check your inbox for the link, or enter the code.</p> : null}
+              {sent ? (
+                <p className="muted text-center text-sm">
+                  {config.emailCode && !config.mock ? "Check your inbox for the link, or enter the code." : "Check your inbox for the link."}
+                </p>
+              ) : null}
             </form>
           ) : null}
-          {config?.emailLogin && sent && !config.mock ? (
+          {config?.emailLogin && config.emailCode && sent && !config.mock ? (
             <form className="grid gap-3" onSubmit={(event) => void confirmCode(event)}>
               <Input
                 inputMode="numeric"
