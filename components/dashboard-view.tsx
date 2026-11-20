@@ -1,5 +1,6 @@
 "use client";
 
+import { subscriptionAllowsBox } from "@/lib/billing-policy";
 import { OrbitIcon, SparkIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -22,7 +23,7 @@ export function DashboardView() {
 
   useEffect(() => {
     if (!data) return;
-    if (!data.subscription || data.subscription.status !== "active") {
+    if (!subscriptionAllowsBox(data.subscription?.status)) {
       router.replace("/checkout");
       return;
     }
@@ -110,6 +111,9 @@ export function DashboardView() {
             {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
           </button>
         </div>
+        {data.subscription?.status === "past_due" ? (
+          <p className="mt-3 text-sm text-[#9b3b3b] dark:text-[#ffb4b4]">Payment failed</p>
+        ) : null}
         {box.error ? <p className="mt-3 text-sm text-[#9b3b3b] dark:text-[#ffb4b4]">{box.error}</p> : null}
       </section>
 

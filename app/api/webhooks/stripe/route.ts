@@ -1,4 +1,6 @@
 import type Stripe from "stripe";
+import { subscriptionEndsBox } from "@/lib/billing-policy";
+import { sendPaymentFailedEmail } from "@/lib/email";
 import { json } from "@/lib/http";
 import { destroyUserBox, markSubscription, activateAndProvision } from "@/lib/provision";
 import { getStripe, stripeId } from "@/lib/stripe-client";
@@ -49,9 +51,7 @@ async function handleEvent(event: Stripe.Event) {
       if (!userId) return;
       const status = mapStatus(subscription.status);
       await markSubscription(userId, status, subscription.id, stripeId(subscription.customer));
-      if (["canceled", "unpaid", "incomplete_expired"].includes(subscription.status)) {
-        await destroyUserBox(userId);
-      }
+      if (subscriptionEndsBox(subscription.status)) await destroyUserBox(userId);
       return;
     }
     case "invoice.payment_failed": {
@@ -60,13 +60,15 @@ async function handleEvent(event: Stripe.Event) {
       if (!subscriptionId) return;
       const row = await store().getSubscriptionByStripeId(subscriptionId);
       if (!row) return;
-      try {
-        await getStripe().subscriptions.cancel(subscriptionId);
-      } catch {
-        // Already canceled, or Stripe will retry the webhook.
-      }
       await markSubscription(row.userId, "past_due", subscriptionId, row.stripeCustomerId);
-      await destroyUserBox(row.userId);
+      const profile = await store().getProfile(row.userId);
+      if (profile) {
+        try {
+          await sendPaymentFailedEmail(profile);
+        } catch {
+          // The box stays up even if the warning email fails.
+        }
+      }
       return;
     }
     default:

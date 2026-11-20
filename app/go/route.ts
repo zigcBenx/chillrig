@@ -1,4 +1,5 @@
 import { connection, NextResponse } from "next/server";
+import { subscriptionAllowsBox } from "@/lib/billing-policy";
 import { loadAccount } from "@/lib/provision";
 import { getCurrentUser } from "@/lib/session";
 
@@ -8,7 +9,7 @@ export async function GET(request: Request) {
   const origin = new URL(request.url).origin;
   if (!user) return NextResponse.redirect(new URL("/login", origin));
   const { subscription, box } = await loadAccount(user.id);
-  if (!subscription || subscription.status !== "active") {
+  if (!subscription || !subscriptionAllowsBox(subscription.status)) {
     return NextResponse.redirect(new URL("/checkout", origin));
   }
   if (!box || box.status === "destroyed") return NextResponse.redirect(new URL("/checkout", origin));

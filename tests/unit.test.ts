@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { subscriptionAllowsBox, subscriptionEndsBox } from "../lib/billing-policy";
 import { renderUserData } from "../lib/cloud-init";
 import { parseGitHubRepo } from "../lib/github";
 import { buildSteps, mockIndex, mockIsReady } from "../lib/progress";
@@ -107,6 +108,18 @@ describe("install script", () => {
     assert.match(script, /X-Chillrig-Auth/);
     assert.match(script, /PasswordAuthentication no/);
     assert.doesNotMatch(script, /setup-token/);
+    assert.doesNotMatch(script, /hash-password[\s\S]{0,120}sed/);
+    assert.match(script, /CHILLRIG_BASIC_HASH/);
+    assert.match(script, /tmux new-session -d -s chillrig/);
+    assert.match(script, /shred -u/);
+    assert.match(script, /22\/tcp/);
+    assert.match(script, /enable-tls\.sh/);
+    assert.equal(subscriptionAllowsBox("past_due"), true);
+    assert.equal(subscriptionAllowsBox("active"), true);
+    assert.equal(subscriptionAllowsBox("canceled"), false);
+    assert.equal(subscriptionEndsBox("unpaid"), true);
+    assert.equal(subscriptionEndsBox("past_due"), false);
+    assert.equal(subscriptionEndsBox("canceled"), true);
     assert.doesNotMatch(readFileSync("components/mock-terminal.tsx", "utf8"), /fetch\(|WebSocket|setup-token/);
     assert.doesNotMatch(readFileSync("components/live-terminal.tsx", "utf8"), /console\.(log|debug|info|trace)/);
     const userData = renderUserData({

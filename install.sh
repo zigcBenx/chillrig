@@ -221,9 +221,10 @@ CHILLRIG_USER=${CHILLRIG_USER}
 EOF
 chmod 0644 /etc/chillrig/env
 
-AUTH_BLOCK=""
+# The bcrypt hash contains '$'. Write it from Python so no shell heredoc can
+# expand '$' or '$$'. Caddy 2 accepts the raw hash from `caddy hash-password`.
 if [[ -n "$CHILLRIG_CONTROL_PLANE" ]]; then
-  AUTH_BLOCK=$(cat << EOF
+  cat > /etc/chillrig/auth.caddy << EOF
 forward_auth ${CHILLRIG_CONTROL_PLANE} {
 	uri /api/terminal/verify
 	header_up X-Chillrig-Ticket {http.request.uri.query.ticket}
@@ -231,39 +232,30 @@ forward_auth ${CHILLRIG_CONTROL_PLANE} {
 	header_up X-Forwarded-Host {http.request.host}
 }
 EOF
-)
 else
   PASS_FILE=/etc/chillrig/terminal.password
   if [[ ! -s "$PASS_FILE" ]]; then
-    openssl rand -base64 18 > "$PASS_FILE"
+    openssl rand -base64 18 | tr -d '\n' > "$PASS_FILE"
     chmod 0600 "$PASS_FILE"
     echo "Terminal user: ${CHILLRIG_USER}"
     echo "Terminal password: $(cat "$PASS_FILE")"
   fi
-  HASH=$(caddy hash-password --plaintext "$(cat "$PASS_FILE")" | sed 's/\$/\$\$/g')
-  AUTH_BLOCK=$(cat << EOF
-basic_auth {
-	${CHILLRIG_USER} ${HASH}
-}
-EOF
-)
+  CHILLRIG_BASIC_USER="$CHILLRIG_USER" \
+  CHILLRIG_BASIC_HASH="$(caddy hash-password --plaintext "$(tr -d '\n' < "$PASS_FILE")")" \
+  python3 - << 'PY'
+import os
+from pathlib import Path
+user = os.environ["CHILLRIG_BASIC_USER"]
+hashed = os.environ["CHILLRIG_BASIC_HASH"].strip()
+Path("/etc/chillrig/auth.caddy").write_text(f"basic_auth {{\n\t{user} {hashed}\n}}\n")
+PY
 fi
+chmod 0644 /etc/chillrig/auth.caddy
 
-SITE_ADDRESS="${CHILLRIG_DOMAIN:-:80}"
-GLOBAL_BLOCK=""
-if [[ -n "$CHILLRIG_DOMAIN" ]]; then
-  GLOBAL_BLOCK=$(cat << EOF
-{
-	email ${CHILLRIG_ACME_EMAIL}
-}
-EOF
-)
-fi
-
-cat > /etc/chillrig/Caddyfile.tmpl << EOF
-${GLOBAL_BLOCK}
-
-${SITE_ADDRESS} {
+# Shared site body. Boot on :80 so a missing DNS record cannot stop the box.
+# When a domain is set, chillrig-tls swaps in the HTTPS file after the name resolves.
+# __APP_PORT__ stays in the template the agent rewrites; it is not hidden in an import.
+routes_body=$(cat << 'EOF'
 	encode zstd gzip
 
 	handle /_chillrig/health {
@@ -271,14 +263,14 @@ ${SITE_ADDRESS} {
 	}
 
 	handle /_chillrig/* {
-		${AUTH_BLOCK}
+		import /etc/chillrig/auth.caddy
 		reverse_proxy 127.0.0.1:7682 {
 			header_up X-Chillrig-Auth "ok"
 		}
 	}
 
 	handle /ttyd/* {
-		${AUTH_BLOCK}
+		import /etc/chillrig/auth.caddy
 		reverse_proxy 127.0.0.1:7681 {
 			header_up X-Chillrig-Auth "ok"
 		}
@@ -287,9 +279,64 @@ ${SITE_ADDRESS} {
 	handle {
 		reverse_proxy 127.0.0.1:__APP_PORT__
 	}
+EOF
+)
+
+cat > /etc/chillrig/Caddyfile.http.tmpl << EOF
+:80 {
+${routes_body}
 }
 EOF
 
+if [[ -n "$CHILLRIG_DOMAIN" ]]; then
+  cat > /etc/chillrig/Caddyfile.https.tmpl << EOF
+{
+	email ${CHILLRIG_ACME_EMAIL}
+}
+
+${CHILLRIG_DOMAIN} {
+${routes_body}
+}
+EOF
+  cat > /opt/chillrig/enable-tls.sh << EOF
+#!/bin/bash
+set -euo pipefail
+domain=${CHILLRIG_DOMAIN}
+while true; do
+  if getent ahostsv4 "\$domain" >/dev/null 2>&1 || getent ahosts "\$domain" >/dev/null 2>&1; then
+    port=\$(tr -d '[:space:]' < /etc/chillrig/app_port)
+    sed "s/__APP_PORT__/\${port}/g" /etc/chillrig/Caddyfile.https.tmpl > /etc/caddy/Caddyfile.next
+    if caddy validate --config /etc/caddy/Caddyfile.next >/dev/null 2>&1; then
+      mv /etc/caddy/Caddyfile.next /etc/caddy/Caddyfile
+      cp /etc/chillrig/Caddyfile.https.tmpl /etc/chillrig/Caddyfile.tmpl
+      if caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || systemctl restart caddy; then
+        exit 0
+      fi
+    fi
+    rm -f /etc/caddy/Caddyfile.next
+  fi
+  sleep 15
+done
+EOF
+  chmod 0755 /opt/chillrig/enable-tls.sh
+  cat > /etc/systemd/system/chillrig-tls.service << 'EOF'
+[Unit]
+Description=Chillrig TLS once DNS resolves
+After=caddy.service network-online.target
+Wants=caddy.service
+
+[Service]
+Type=simple
+ExecStart=/opt/chillrig/enable-tls.sh
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+EOF
+fi
+
+cp /etc/chillrig/Caddyfile.http.tmpl /etc/chillrig/Caddyfile.tmpl
 sed "s/__APP_PORT__/${CHILLRIG_APP_PORT}/g" /etc/chillrig/Caddyfile.tmpl > /etc/caddy/Caddyfile
 printf '%s\n' "$CHILLRIG_APP_PORT" > /etc/chillrig/app_port
 caddy validate --config /etc/caddy/Caddyfile
@@ -344,15 +391,28 @@ ufw default allow outgoing
 ufw allow 80/tcp
 ufw allow 443/tcp
 if [[ "$CHILLRIG_CLOSE_SSH" == "1" ]]; then
-  ufw delete allow OpenSSH >/dev/null 2>&1 || true
+  # Delete every SSH allow, including "22/tcp" and "OpenSSH", highest number first.
+  while true; do
+    num=$(ufw status numbered | grep ALLOW | grep -E 'OpenSSH|22/tcp' | sed -n 's/^\[\s*\([0-9][0-9]*\)\].*/\1/p' | tail -1)
+    [[ -n "${num}" ]] || break
+    ufw --force delete "$num" >/dev/null 2>&1 || break
+  done
 else
   ufw allow OpenSSH
 fi
 ufw --force enable
 
+runuser -u "$CHILLRIG_USER" -- tmux start-server
+if ! runuser -u "$CHILLRIG_USER" -- tmux has-session -t chillrig 2>/dev/null; then
+  runuser -u "$CHILLRIG_USER" -- tmux new-session -d -s chillrig -c "/home/${CHILLRIG_USER}"
+fi
+
 systemctl daemon-reload
 systemctl enable chillrig-agent chillrig-ttyd caddy
 systemctl restart chillrig-agent chillrig-ttyd caddy
+if [[ -n "$CHILLRIG_DOMAIN" ]]; then
+  systemctl enable --now chillrig-tls.service
+fi
 touch /var/lib/chillrig/ready
 
 if [[ -n "$CHILLRIG_READY_URL" && -n "$CHILLRIG_READY_TOKEN" ]]; then
@@ -361,5 +421,22 @@ if [[ -n "$CHILLRIG_READY_URL" && -n "$CHILLRIG_READY_TOKEN" ]]; then
     -H "Content-Type: application/json" \
     -d '{"ok":true}' || echo "Ready callback did not reach the control plane."
 fi
+
+# Drop cloud-init copies of the ready token and control-plane URL.
+shopt -s nullglob
+for path in \
+  /var/lib/cloud/instance/user-data.txt \
+  /var/lib/cloud/instance/user-data.txt.i \
+  /var/lib/cloud/instance/vendor-data.txt \
+  /var/lib/cloud/instance/vendor-data.txt.i \
+  /var/lib/cloud/instances/*/user-data.txt \
+  /var/lib/cloud/instances/*/user-data.txt.i \
+  /var/lib/cloud/instances/*/vendor-data.txt \
+  /var/lib/cloud/instances/*/cloud-config.txt
+do
+  [[ -f "$path" ]] || continue
+  shred -u -n 1 "$path" 2>/dev/null || rm -f "$path"
+done
+shopt -u nullglob
 
 echo "Chillrig box is ready."

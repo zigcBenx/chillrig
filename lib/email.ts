@@ -26,3 +26,28 @@ export async function sendReadyEmail(profile: Profile, hostname: string) {
   });
   return response.ok;
 }
+
+export async function sendPaymentFailedEmail(profile: Profile) {
+  const key = process.env.RESEND_API_KEY;
+  const from = process.env.EMAIL_FROM;
+  if (!key || !from || !profile.email) return false;
+  const dashboard = appBaseUrl() ? `${appBaseUrl()}/dashboard` : "";
+  const text = dashboard
+    ? `A payment for your Chillrig box failed. The box stays on while Stripe retries.\n\nIf the subscription is canceled, the box is deleted.\n${dashboard}\n`
+    : "A payment for your Chillrig box failed. The box stays on while Stripe retries.\n\nIf the subscription is canceled, the box is deleted.\n";
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from,
+      to: [profile.email],
+      subject: "Payment failed",
+      text,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  return response.ok;
+}

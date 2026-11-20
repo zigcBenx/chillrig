@@ -32,7 +32,7 @@ npm run build
 7. The terminal is ttyd attached to a tmux session, so closing the tab does not stop a running agent.
 8. `https://<slug>.<domain>` proxies to the app port on the box (3000 by default).
 
-One person, one subscription, one box. Cancel, or a failed invoice, deletes the server and its IPv4.
+One person, one subscription, one box. Cancel deletes the server and its IPv4. A failed invoice marks the subscription past due and leaves the box running while Stripe retries.
 
 ## Security model
 
@@ -71,11 +71,11 @@ The Cloudflare token needs DNS edit on the zone in `CLOUDFLARE_ZONE_ID`. Records
 
 Deploy this Next.js app to Vercel. Set the environment before the first production build so the public Supabase values are available. The VM install script is traced into the server bundle from `install.sh`.
 
-A failed invoice cancels the Stripe subscription and deletes the VM. There is no grace period. Stripe will retry the webhook if the handler returns an error; processed event ids are stored so a retry does not create a second machine.
+The first `invoice.payment_failed` marks the subscription past due, emails the subscriber when Resend is configured, and does not delete the VM. The VM is deleted when Stripe sends `customer.subscription.deleted` or the subscription becomes `canceled`, `unpaid`, or `incomplete_expired`. Processed event ids are stored so a webhook retry does not create a second machine.
 
 ### Email
 
-If `RESEND_API_KEY` and `EMAIL_FROM` are set, the subscriber gets one email when the box is marked ready. Without them, the dashboard still updates.
+If `RESEND_API_KEY` and `EMAIL_FROM` are set, the subscriber gets one email when the box is marked ready, and a warning when a payment fails. Without them, the dashboard still updates.
 
 ## Self-host the box
 
@@ -108,9 +108,9 @@ Mock state is stored in `.data/` (or `/tmp/chillrig` on Vercel). It is gitignore
 
 ## Risks
 
-- A single failed invoice tears the VM down and cancels the subscription. Stripe's normal retry window is not used as a grace period.
+- The box stays up through Stripe's payment retries and is deleted only after the subscription is canceled or unpaid. A webhook that never arrives leaves the machine running.
 - Terminal tickets travel in the WebSocket query string for about 90 seconds. Caddy access logs are left off. Turning them on would record those tickets on the VM.
-- The ready token sits in cloud-init user-data until it is used or expires. It can only flip that box to ready.
+- The ready token is removed from cloud-init user-data after the callback. Until that runs, it can only mark that one box ready.
 - `cx33` capacity in `fsn1` and `hel1` can fail. The row is marked `error` and a paid subscriber can retry without being charged again.
 - Two checkout webhooks arriving in the same moment rely on the one-box database constraint. A crash after Hetzner accepts a server but before the id is saved could orphan a machine; the next sync adopts or the error path deletes known ids.
 - Preview iframes the subscriber's own app. It is a different site from the control plane, so it does not receive the Chillrig session cookie.

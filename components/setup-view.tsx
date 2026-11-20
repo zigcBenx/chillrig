@@ -1,5 +1,6 @@
 "use client";
 
+import { subscriptionAllowsBox } from "@/lib/billing-policy";
 import { Button } from "@/components/ui/button";
 import { useAccount } from "@/components/use-account";
 import { Check } from "lucide-react";
@@ -13,7 +14,7 @@ export function SetupView() {
 
   useEffect(() => {
     if (!data) return;
-    if (!data.subscription || data.subscription.status !== "active") {
+    if (!subscriptionAllowsBox(data.subscription?.status)) {
       router.replace("/checkout");
       return;
     }
