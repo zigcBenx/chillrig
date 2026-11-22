@@ -456,15 +456,44 @@ export function issueBoxTicket(userId: string, box: Box) {
   };
 }
 
-export async function verifyBoxTicket(token: string, host: string) {
+/**
+ * A ticket only opens the box it was issued for. The box proves who it is by its
+ * hostname (X-Chillrig-Host from its Caddy) or, for boxes set up before that header
+ * existed, by calling from its own public IPv4 (Cloudflare's CF-Connecting-IP).
+ */
+export async function verifyBoxTicket(token: string, hosts: string[], sourceIp?: string | null) {
   const payload = readBoxTicket(token);
   if (!payload) return false;
   const box = await store().getBoxById(payload.boxId);
   if (!box || box.userId !== payload.sub || box.slug !== payload.slug) return false;
-  const hostname = host.split(":")[0]?.toLowerCase();
   const expected = boxHostname(box, domainName()).toLowerCase();
-  if (hostname !== expected) return false;
+  const hostMatches = hosts.some((host) => host.split(":")[0]?.toLowerCase() === expected);
+  if (!hostMatches && !(await callerIsBox(box, sourceIp))) return false;
   return box.status === "running" || box.status === "provisioning";
+}
+
+async function callerIsBox(box: Box, sourceIp?: string | null) {
+  const ip = sourceIp?.trim().toLowerCase();
+  if (!ip) return false;
+  if (box.ipv4 && ip === box.ipv4) return true;
+  if (!ip.includes(":") || !box.hetznerServerId) return false;
+  // Boxes reach Cloudflare over IPv6 too. Hetzner gives each server one /64.
+  const server = await getServer(box.hetznerServerId);
+  return Boolean(server?.ipv6 && sameIpv6Slash64(ip, server.ipv6));
+}
+
+export function sameIpv6Slash64(ip: string, network: string) {
+  const prefix = (value: string) => {
+    const bare = value.split("/")[0].toLowerCase();
+    const [head, tail = ""] = bare.split("::");
+    const left = head ? head.split(":") : [];
+    const right = tail ? tail.split(":") : [];
+    const groups = bare.includes("::") ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right] : left;
+    if (groups.length !== 8) return null;
+    return groups.slice(0, 4).map((group) => parseInt(group || "0", 16)).join(":");
+  };
+  const a = prefix(ip);
+  return a !== null && a === prefix(network);
 }
 
 async function runningBox(userId: string) {
