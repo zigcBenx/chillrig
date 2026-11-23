@@ -10,10 +10,31 @@ const inter = Inter({
   display: "swap",
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "https://chillrig.jqfdpr2e.workers.dev";
+const shareTitle = "Chillrig - your AI coding box, always on";
+const shareDescription =
+  "Your own cloud computer with Claude Code and Codex. Close your laptop, your agents keep working. Open it from any browser or your phone.";
+const shareImage = { url: "/og.png", width: 1200, height: 630, alt: "Chillrig - your AI coding box, always on" };
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: { default: "Chillrig", template: "%s · Chillrig" },
   description: "Your AI coding box. Always on.",
   applicationName: "Chillrig",
+  openGraph: {
+    type: "website",
+    siteName: "Chillrig",
+    url: "/",
+    title: shareTitle,
+    description: shareDescription,
+    images: [shareImage],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: shareTitle,
+    description: shareDescription,
+    images: [shareImage],
+  },
 };
 
 export const viewport: Viewport = {
