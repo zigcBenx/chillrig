@@ -21,10 +21,12 @@ export function MockTerminal({
   mode,
   projects = [],
   handle,
+  session,
 }: {
   mode: Flow;
   projects?: string[];
   handle?: Ref<TerminalHandle>;
+  session?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -62,6 +64,10 @@ export function MockTerminal({
     state.buffer = "";
     term.writeln("\x1b[38;5;108mChillrig demo\x1b[0m");
     term.writeln("Keystrokes stay in this browser.");
+    if (session) {
+      term.writeln("");
+      term.writeln(`\x1b[2mAttached to ${session}. On a real box, Claude's session shows here live.\x1b[0m`);
+    }
     prompt(term);
     const names = projectKey ? projectKey.split("|") : [];
     const disposable = term.onData((data) => onData(term, data, names));
@@ -73,7 +79,7 @@ export function MockTerminal({
       term.dispose();
       termRef.current = null;
     };
-  }, [projectKey]);
+  }, [projectKey, session]);
 
   return <div ref={ref} className="term-root h-full w-full" />;
 }

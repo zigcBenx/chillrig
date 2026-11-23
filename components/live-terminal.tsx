@@ -23,10 +23,13 @@ export function LiveTerminal({
   mode,
   handle,
   onStatus,
+  session,
 }: {
   mode: Flow;
   handle?: Ref<TerminalHandle>;
   onStatus?: (status: Status) => void;
+  /** Task session to attach to. ttyd -a hands ?arg= to attach.sh, which checks it. */
+  session?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -90,7 +93,8 @@ export function LiveTerminal({
         return;
       }
       const ticket = (await response.json()) as { hostname: string; wsPath: string; ticket: string };
-      const url = `wss://${ticket.hostname}${ticket.wsPath}?ticket=${encodeURIComponent(ticket.ticket)}`;
+      const attach = session ? `&arg=${encodeURIComponent(session)}` : "";
+      const url = `wss://${ticket.hostname}${ticket.wsPath}?ticket=${encodeURIComponent(ticket.ticket)}${attach}`;
       socket = new WebSocket(url, ["tty"]);
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
@@ -145,7 +149,7 @@ export function LiveTerminal({
       socketRef.current = null;
       term.dispose();
     };
-  }, [onStatus]);
+  }, [onStatus, session]);
 
   return <div ref={ref} className="term-root h-full w-full" />;
 }

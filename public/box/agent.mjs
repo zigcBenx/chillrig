@@ -6,10 +6,28 @@
 // find the sign-in URL, the device code and the result, and only those go back.
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, renameSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { parseClaudeStatus, parseGhUser, parseLogin, validateCode, EXIT_MARK } from "./login-parse.mjs";
+import {
+  cleanPrompt,
+  lastLines,
+  makeSessionName,
+  parseGhLogin,
+  parseRepo,
+  parseSessionList,
+  promptTitle,
+  sessionState,
+  SESSION_FORMAT,
+  TASK_TOOLS,
+  TEMPLATES,
+  toolArgs,
+  validNewProject,
+  validProject,
+  validSession,
+} from "./tasks.mjs";
 
-export const AGENT_VERSION = 2;
+export const AGENT_VERSION = 3;
 
 const user = process.env.CHILLRIG_USER || "coder";
 const home = process.env.CHILLRIG_HOME || `/home/${user}`;
@@ -26,10 +44,22 @@ const isRoot = process.getuid?.() === 0;
 const tmuxSocket = process.env.CHILLRIG_TMUX_SOCKET ? ["-L", process.env.CHILLRIG_TMUX_SOCKET] : [];
 const MAIN_SESSION = "chillrig";
 const LOGIN_TTL_MS = 30 * 60 * 1000;
+const projectsDir = `${home}/projects`;
+// Next to this file: /opt/chillrig/task.sh on a box, public/box/task.sh in a checkout.
+const taskScript = fileURLToPath(new URL("./task.sh", import.meta.url));
+const MAX_TASKS = 8;
+// gh gets no terminal on stdin, so it prints the code and the device URL and waits for
+// the browser without asking anything. setup-git lets git clone private repos with it.
 const TOOLS = {
-  claude: { bin: "claude", login: "claude auth login --claudeai" },
-  codex: { bin: "codex", login: "codex login --device-auth" },
+  claude: { bin: "claude", name: "Claude Code", login: "claude auth login --claudeai" },
+  codex: { bin: "codex", name: "Codex", login: "codex login --device-auth" },
+  github: {
+    bin: "gh",
+    name: "GitHub CLI",
+    login: "GH_BROWSER=true gh auth login -h github.com -p https -w </dev/null && gh auth setup-git -h github.com",
+  },
 };
+const statusKey = (tool) => (tool === "github" ? "gh" : tool);
 
 const userPath = [`${home}/.local/bin`, "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"];
 const userEnv = {
@@ -55,12 +85,12 @@ function send(res, code, body, origin) {
 
 // The browser sends only "simple" requests (GET, or POST with a text/plain JSON body)
 // with the ticket in the query string, so there is no preflight for Caddy to reject.
-function readJson(req) {
+function readJson(req, limit = 8000) {
   return new Promise((resolve, reject) => {
     let raw = "";
     req.on("data", (chunk) => {
       raw += chunk;
-      if (raw.length > 8000) {
+      if (raw.length > limit) {
         reject(new Error("too large"));
         req.destroy();
       }
@@ -174,7 +204,7 @@ function toolStatus(tool, fresh = false) {
   const ttl = fresh ? 1500 : login ? 2500 : 5000;
   if (tool === "claude") return cached("claude", ttl, claudeStatus);
   if (tool === "codex") return cached("codex", ttl, codexStatus);
-  return cached("gh", 30000, ghStatus);
+  return cached("gh", fresh ? 1500 : login?.tool === "github" ? 2500 : 30000, ghStatus);
 }
 
 // ---- CLI login inside a dedicated tmux session ----
@@ -203,7 +233,7 @@ fs.renameSync(path + ".chillrig", path);
 
 async function startLogin(tool) {
   const spec = TOOLS[tool];
-  if (!installed(spec.bin)) return { error: `${tool === "claude" ? "Claude Code" : "Codex"} is not installed on this box`, status: 409 };
+  if (!installed(spec.bin)) return { error: `${spec.name} is not installed on this box`, status: 409 };
   await ensureTmuxServer();
   const before = await toolStatus(tool, true);
   if (login) await tmux(["kill-session", "-t", login.session]);
@@ -219,8 +249,8 @@ async function startLogin(tool) {
   return { ok: true };
 }
 
-async function capture(session) {
-  const result = await tmux(["capture-pane", "-p", "-J", "-S", "-200", "-t", session]);
+async function capture(session, lines = 200) {
+  const result = await tmux(["capture-pane", "-p", "-J", "-S", String(-lines), "-t", `=${session}:`]);
   return result.code === 0 ? result.stdout : null;
 }
 
@@ -236,16 +266,24 @@ async function loginState(statuses) {
     return login ? { tool, ...login.final.state } : null;
   }
   const pane = await capture(login.session);
-  const parsed = pane === null ? { phase: "error", message: "Sign-in stopped. Try again." } : parseLogin(tool, pane, { codeSent: login.codeSent });
-  let status = statuses[tool];
+  const parsed =
+    pane === null
+      ? { phase: "error", message: "Sign-in stopped. Try again." }
+      : tool === "github"
+        ? parseGhLogin(pane)
+        : parseLogin(tool, pane, { codeSent: login.codeSent });
+  const key = statusKey(tool);
+  let status = statuses[key];
   if (parsed.phase === "done" || parsed.phase === "error" || parsed.phase === "verifying") {
-    forget(tool);
+    forget(key);
     status = await toolStatus(tool, true);
   }
-  const loggedInNow = Boolean(status?.loggedIn) && (!login.wasLoggedIn || parsed.phase === "done");
+  // GitHub counts only once the script ends: setup-git runs after gh reports success.
+  const loggedInNow =
+    Boolean(status?.loggedIn) && (tool === "github" ? parsed.phase === "done" : !login.wasLoggedIn || parsed.phase === "done");
   if (loggedInNow) {
     login.final = { at: Date.now(), state: { phase: "done" } };
-    statuses[tool] = status;
+    statuses[key] = status;
     await tmux(["kill-session", "-t", login.session]);
     return { tool, phase: "done" };
   }
@@ -314,31 +352,289 @@ async function startUpdate() {
   return { ok: true };
 }
 
-// ---- clone + port (used by the control plane) ----
+// ---- projects: list, create from a template, clone from GitHub ----
 
-function parseRepo(input) {
-  if (typeof input !== "string" || input.length > 200 || /\s/.test(input)) return null;
-  let url;
-  try {
-    url = new URL(input);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== "https:" || url.hostname !== "github.com" || url.username || url.password || url.search) return null;
-  const match = url.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/);
-  if (!match) return null;
-  const owner = match[1];
-  const repo = match[2];
-  if (!owner || !repo || owner.startsWith(".") || repo.startsWith(".")) return null;
-  return { cloneUrl: `https://github.com/${owner}/${repo}.git`, repo };
+let job = null; // { kind: "create" | "clone", project, template?, phase, message?, fallback?, startedAt, endedAt? }
+
+function jobView() {
+  if (!job) return null;
+  const { kind, project, template, phase, message, fallback, startedAt, endedAt } = job;
+  return { kind, project, template, phase, message, fallback, startedAt, endedAt };
 }
+
+function isProjectDir(name) {
+  try {
+    return lstatSync(`${projectsDir}/${name}`).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function listProjects() {
+  let entries = [];
+  try {
+    entries = readdirSync(projectsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const projects = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !validProject(entry.name)) continue;
+    let modifiedAt = 0;
+    try {
+      modifiedAt = lstatSync(`${projectsDir}/${entry.name}`).mtimeMs;
+    } catch {
+      continue;
+    }
+    projects.push({ name: entry.name, git: existsSync(`${projectsDir}/${entry.name}/.git`), modifiedAt: Math.round(modifiedAt) });
+  }
+  return projects.sort((a, b) => b.modifiedAt - a.modifiedAt).slice(0, 100);
+}
+
+function busy() {
+  if (job?.phase !== "running") return null;
+  return { error: `Still setting up ${job.project}. One moment.`, status: 409 };
+}
+
+// Writes as the user (never as root into their home), arguments as argv.
+const WRITE_README = `require("fs").writeFileSync(process.argv[1], "# " + process.argv[2] + "\\n", { flag: "wx", mode: 0o644 });`;
+
+async function makeEmptyProject(name) {
+  const dir = `${projectsDir}/${name}`;
+  await asUser("mkdir", ["-p", "--", dir]);
+  if (!existsSync(`${dir}/.git`)) await asUser("git", ["init", "-q", "-b", "main", "--", dir]);
+  if (!existsSync(`${dir}/README.md`)) await asUser(process.execPath, ["-e", WRITE_README, "--", `${dir}/README.md`, name]);
+  return isProjectDir(name);
+}
+
+// create-next-app with every answer given, so it never stops to ask. timeout(1) puts
+// npx and npm in their own process group and ends all of them after 5 minutes.
+const NEXT_ENV = {
+  ...userEnv,
+  CI: "1",
+  NEXT_TELEMETRY_DISABLED: "1",
+  npm_config_yes: "true",
+  npm_config_fund: "false",
+  npm_config_audit: "false",
+  npm_config_update_notifier: "false",
+};
+
+async function runCreate(current) {
+  const { project } = current;
+  let ok = false;
+  if (current.template === "nextjs") {
+    const result = await asUser(
+      "timeout",
+      ["-k", "10", "300", "npx", "--yes", "create-next-app@latest", project,
+        "--ts", "--eslint", "--tailwind", "--app", "--use-npm", "--import-alias", "@/*", "--yes"],
+      { cwd: projectsDir, timeoutMs: 330000, env: NEXT_ENV },
+    );
+    ok = result.code === 0 && existsSync(`${projectsDir}/${project}/package.json`);
+    if (!ok) current.fallback = true;
+    // create-next-app drops its git repo when it cannot commit (no git identity yet).
+    else if (!existsSync(`${projectsDir}/${project}/.git`)) {
+      await asUser("git", ["init", "-q", "-b", "main", "--", `${projectsDir}/${project}`]);
+    }
+  }
+  if (!ok) ok = await makeEmptyProject(project);
+  current.phase = ok ? "done" : "error";
+  if (!ok) current.message = "Could not create the project. Try again.";
+  else if (current.fallback) current.message = "Next.js setup failed, so this is an empty project. Ask Claude to set it up.";
+  current.endedAt = Date.now();
+}
+
+async function createProject(body) {
+  const name = validNewProject(body.name);
+  if (!name) return { error: "Use lowercase letters, numbers, - or _ (up to 41).", status: 400 };
+  const template = TEMPLATES.includes(body.template) ? body.template : null;
+  if (!template) return { error: "Unknown template", status: 400 };
+  const blocked = busy();
+  if (blocked) return blocked;
+  if (existsSync(`${projectsDir}/${name}`)) return { error: `You already have a project called ${name}.`, status: 409 };
+  await asUser("mkdir", ["-p", "--", projectsDir]);
+  job = { kind: "create", project: name, template, phase: "running", startedAt: Date.now() };
+  const current = job;
+  runCreate(current).catch(() => {
+    current.phase = "error";
+    current.message = "Could not create the project. Try again.";
+    current.endedAt = Date.now();
+  });
+  return { ok: true, project: name, job: jobView() };
+}
+
+async function cloneProject(body) {
+  const repo = parseRepo(body.url);
+  if (!repo) return { error: "Paste a link like https://github.com/you/repo", status: 400 };
+  if (isProjectDir(repo.repo)) return { ok: true, project: repo.repo, existing: true };
+  const blocked = busy();
+  if (blocked) return blocked;
+  if (existsSync(`${projectsDir}/${repo.repo}`)) return { error: `~/projects/${repo.repo} is in the way.`, status: 409 };
+  // A quick look first: private repos need GitHub sign-in (git asks gh for credentials).
+  const probe = await asUser("git", ["ls-remote", "--", repo.cloneUrl, "HEAD"], { timeoutMs: 15000 });
+  if (probe.code !== 0) {
+    forget("gh");
+    const gh = await toolStatus("github", true);
+    if (!gh?.loggedIn) {
+      return { error: "Can't open that repo. If it's private, connect GitHub first.", status: 409, needsGitHub: true };
+    }
+    return { error: `Can't open that repo. Check the link, and that ${gh.user ?? "your GitHub account"} can see it.`, status: 404 };
+  }
+  await asUser("mkdir", ["-p", "--", projectsDir]);
+  job = { kind: "clone", project: repo.repo, phase: "running", startedAt: Date.now() };
+  const current = job;
+  asUser("timeout", ["-k", "10", "600", "git", "clone", "--quiet", "--", repo.cloneUrl, `${projectsDir}/${repo.repo}`], {
+    timeoutMs: 630000,
+    cwd: projectsDir,
+  })
+    .then((result) => {
+      const ok = result.code === 0 && isProjectDir(repo.repo);
+      current.phase = ok ? "done" : "error";
+      if (!ok) current.message = "Clone failed. Try again.";
+      current.endedAt = Date.now();
+    })
+    .catch(() => {
+      current.phase = "error";
+      current.message = "Clone failed. Try again.";
+      current.endedAt = Date.now();
+    });
+  return { ok: true, project: repo.repo, job: jobView() };
+}
+
+// ---- task sessions: Claude or Codex working in a project, in its own tmux session ----
+
+// Runs as the user. Saves the prompt for task.sh and answers the one-time questions the
+// CLI would otherwise stop on: Claude's onboarding, folder trust and (only when the user
+// chose it) the bypass-permissions notice; Codex's folder trust. Checked against
+// Claude Code 2.1.330 and Codex 0.171.0. Unreadable files are left alone.
+const PREPARE_TASK = `
+const fs = require("fs");
+const path = require("path");
+const home = require("os").homedir();
+const input = JSON.parse(process.argv[1]);
+function readObject(file) {
+  try {
+    const data = JSON.parse(fs.readFileSync(file, "utf8"));
+    return data && typeof data === "object" && !Array.isArray(data) ? data : null;
+  } catch (e) {
+    return e.code === "ENOENT" ? {} : null;
+  }
+}
+function save(file, text) {
+  fs.writeFileSync(file + ".chillrig", text, { mode: 0o600 });
+  fs.renameSync(file + ".chillrig", file);
+}
+const tasks = path.join(home, ".chillrig", "tasks");
+fs.mkdirSync(tasks, { recursive: true, mode: 0o700 });
+save(path.join(tasks, input.name + ".prompt"), input.prompt);
+if (input.tool === "claude") {
+  const file = path.join(home, ".claude.json");
+  const data = readObject(file);
+  if (data) {
+    data.hasCompletedOnboarding = true;
+    if (!data.theme) data.theme = "dark";
+    if (!data.projects || typeof data.projects !== "object") data.projects = {};
+    const entry = data.projects[input.cwd] && typeof data.projects[input.cwd] === "object" ? data.projects[input.cwd] : {};
+    entry.hasTrustDialogAccepted = true;
+    data.projects[input.cwd] = entry;
+    save(file, JSON.stringify(data, null, 2));
+  }
+  if (input.autoApprove) {
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true, mode: 0o700 });
+    const file = path.join(home, ".claude", "settings.json");
+    const settings = readObject(file);
+    if (settings && settings.skipDangerousModePermissionPrompt !== true) {
+      settings.skipDangerousModePermissionPrompt = true;
+      save(file, JSON.stringify(settings, null, 2));
+    }
+  }
+} else {
+  fs.mkdirSync(path.join(home, ".codex"), { recursive: true, mode: 0o700 });
+  const file = path.join(home, ".codex", "config.toml");
+  let text = "";
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch (e) {
+    if (e.code !== "ENOENT") text = null;
+  }
+  const header = "[projects." + JSON.stringify(input.cwd) + "]";
+  if (text !== null && !text.split("\\n").some((line) => line.trim() === header)) {
+    const sep = text && !text.endsWith("\\n") ? "\\n\\n" : text ? "\\n" : "";
+    save(file, text + sep + header + "\\ntrust_level = \\"trusted\\"\\n");
+  }
+}
+`;
+
+async function listSessions() {
+  const rows = (await listSessionRows()).slice(0, 20);
+  return Promise.all(
+    rows.map(async (row, index) => {
+      const pane = index < 12 ? await capture(row.name, 80) : null;
+      return { ...row, state: sessionState(row.running, pane ?? ""), lastLines: pane ? lastLines(pane) : [] };
+    }),
+  );
+}
+
+async function startSession(body) {
+  const tool = TASK_TOOLS.includes(body.tool) ? body.tool : null;
+  if (!tool) return { error: "Unknown tool", status: 400 };
+  const project = validProject(body.project);
+  if (!project || !isProjectDir(project)) return { error: "Pick a project first", status: 400 };
+  const prompt = cleanPrompt(body.prompt);
+  if (!prompt) return { error: "Tell it what to build (up to 6000 characters).", status: 400 };
+  if (!installed(TOOLS[tool].bin)) return { error: `${TOOLS[tool].name} is not installed on this box`, status: 409 };
+  const status = await toolStatus(tool, true);
+  if (!status?.loggedIn) return { error: `Sign in to ${tool === "claude" ? "Claude" : "ChatGPT"} first`, status: 409 };
+  const running = (await listSessionRows()).filter((row) => row.running).length;
+  if (running >= MAX_TASKS) return { error: `You have ${running} tasks running. Stop one first.`, status: 409 };
+
+  let name = makeSessionName(project);
+  if ((await tmux(["has-session", "-t", `=${name}`])).code === 0) name = makeSessionName(project, Date.now() + 1 + Math.floor(Math.random() * 1000));
+  if ((await tmux(["has-session", "-t", `=${name}`])).code === 0) return { error: "Try again in a second", status: 409 };
+  const cwd = `${projectsDir}/${project}`;
+  const autoApprove = body.autoApprove === true;
+  const prepared = await asUser(process.execPath, ["-e", PREPARE_TASK, "--", JSON.stringify({ name, tool, cwd, prompt, autoApprove })], {
+    timeoutMs: 10000,
+  });
+  if (prepared.code !== 0) return { error: "Could not start the task", status: 500 };
+  await ensureTmuxServer();
+  // Argument form: tmux runs task.sh directly, with no shell in between.
+  const created = await tmux(["new-session", "-d", "-s", name, "-x", "200", "-y", "50", "-c", cwd, "--", "/bin/bash", taskScript, name, tool, ...toolArgs(tool, autoApprove)]);
+  if (created.code !== 0) return { error: "Could not start the task", status: 500 };
+  const target = `=${name}:`;
+  await tmux([
+    "set-option", "-t", target, "@cr_tool", tool, ";",
+    "set-option", "-t", target, "@cr_project", project, ";",
+    "set-option", "-t", target, "@cr_title", promptTitle(prompt),
+  ]);
+  return { ok: true, name, project, tool };
+}
+
+async function listSessionRows() {
+  const result = await tmux(["list-sessions", "-F", SESSION_FORMAT]);
+  return result.code === 0 ? parseSessionList(result.stdout) : [];
+}
+
+async function stopSession(input) {
+  const name = validSession(input);
+  if (!name) return { error: "Unknown task", status: 400 };
+  const tool = (await tmux(["show-options", "-t", `=${name}:`, "-v", "-q", "@cr_tool"])).stdout.trim();
+  // Only task sessions: never the shared terminal or a sign-in.
+  if (!TASK_TOOLS.includes(tool)) return { error: "Unknown task", status: 404 };
+  await tmux(["kill-session", "-t", `=${name}`]);
+  return { ok: true };
+}
+
+// ---- clone + port (used by the control plane) ----
 
 function isPort(value) {
   return Number.isInteger(value) && value >= 1024 && value <= 65535 && value !== 7681 && value !== 7682;
 }
 
 function reply(res, result, origin) {
-  if (result.error) return send(res, result.status || 400, { error: result.error }, origin);
+  if (result.error) {
+    const body = result.needsGitHub ? { error: result.error, needsGitHub: true } : { error: result.error };
+    return send(res, result.status || 400, body, origin);
+  }
   return send(res, 200, result, origin);
 }
 
@@ -378,12 +674,12 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { version: AGENT_VERSION, ...statuses, login: state }, origin);
     }
     if (req.method === "GET" && route === "/login/state") {
-      const statuses = { claude: await toolStatus("claude"), codex: await toolStatus("codex") };
+      const statuses = { claude: await toolStatus("claude"), codex: await toolStatus("codex"), gh: await toolStatus("github") };
       return send(res, 200, { login: await loginState(statuses) }, origin);
     }
     if (req.method === "POST" && route === "/login/start") {
       const body = await readJson(req);
-      if (body.tool !== "claude" && body.tool !== "codex") return send(res, 400, { error: "Unknown tool" }, origin);
+      if (!Object.hasOwn(TOOLS, body.tool)) return send(res, 400, { error: "Unknown tool" }, origin);
       return reply(res, await startLogin(body.tool), origin);
     }
     if (req.method === "POST" && route === "/login/code") {
@@ -401,6 +697,25 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && route === "/update") {
       return reply(res, await startUpdate(), origin);
+    }
+    if (req.method === "GET" && route === "/projects") {
+      return send(res, 200, { projects: listProjects(), job: jobView() }, origin);
+    }
+    if (req.method === "POST" && route === "/projects") {
+      return reply(res, await createProject(await readJson(req)), origin);
+    }
+    if (req.method === "POST" && route === "/projects/clone") {
+      return reply(res, await cloneProject(await readJson(req)), origin);
+    }
+    if (req.method === "GET" && route === "/sessions") {
+      return send(res, 200, { sessions: await listSessions() }, origin);
+    }
+    if (req.method === "POST" && route === "/sessions") {
+      return reply(res, await startSession(await readJson(req, 16000)), origin);
+    }
+    const stop = req.method === "POST" ? route.match(/^\/sessions\/([^/]+)\/stop$/) : null;
+    if (stop) {
+      return reply(res, await stopSession(stop[1]), origin);
     }
     if (req.method === "POST" && route === "/clone") {
       const body = await readJson(req);

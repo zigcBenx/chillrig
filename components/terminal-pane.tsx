@@ -12,11 +12,14 @@ export function TerminalPane({
   mode,
   handle,
   projects = [],
+  session,
   onStatus,
 }: {
   mode: Flow;
   handle?: Ref<TerminalHandle>;
   projects?: string[];
+  /** A task session to attach to instead of the shared one. */
+  session?: string;
   onStatus?: (status: "connecting" | "open" | "closed") => void;
 }) {
   const router = useRouter();
@@ -44,6 +47,6 @@ export function TerminalPane({
   }, [onStatus, router]);
 
   if (demo === null) return <div className="h-full w-full bg-[#0c0c0e]" />;
-  if (demo) return <MockTerminal mode={mode} handle={handle} projects={projects} />;
-  return <LiveTerminal mode={mode} handle={handle} onStatus={onStatus} />;
+  if (demo) return <MockTerminal mode={mode} handle={handle} projects={projects} session={session} />;
+  return <LiveTerminal mode={mode} handle={handle} onStatus={onStatus} session={session} />;
 }

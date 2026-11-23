@@ -2,11 +2,11 @@
 
 import { subscriptionAllowsBox } from "@/lib/billing-policy";
 import { OrbitIcon, SparkIcon } from "@/components/icons";
+import { SessionsCard } from "@/components/sessions-card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { useAccount } from "@/components/use-account";
-import { connectBox } from "@/lib/box-client";
+import { connectBox, type BoxClient, type BoxStatus } from "@/lib/box-client";
 import { AppWindow, Check, Copy, GitBranch, Terminal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -15,23 +15,25 @@ import { useEffect, useState } from "react";
 export function DashboardView() {
   const router = useRouter();
   const { data, error } = useAccount(4000);
-  const [cloneOpen, setCloneOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
-  const [url, setUrl] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [pending, setPending] = useState(false);
-  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  const [client, setClient] = useState<BoxClient | null>(null);
+  const [boxStatus, setBoxStatus] = useState<BoxStatus | null>(null);
   const running = data?.box?.status === "running";
+  const signedIn = boxStatus ? boxStatus.claude.loggedIn || boxStatus.codex.loggedIn : null;
 
-  // One look at the box (not a poll): is Claude or ChatGPT signed in yet?
+  // One look at the box (not a poll): is Claude or ChatGPT signed in, which agent runs?
   useEffect(() => {
     if (!running) return;
     let cancel = false;
     connectBox()
-      .then((client) => client.status())
-      .then((status) => {
-        if (!cancel) setSignedIn(status.claude.loggedIn || status.codex.loggedIn);
+      .then(async (next) => {
+        const status = await next.status();
+        if (cancel) return;
+        setClient(next);
+        setBoxStatus(status);
       })
       .catch(() => undefined);
     return () => {
@@ -59,25 +61,6 @@ export function DashboardView() {
     await navigator.clipboard.writeText(data.box.hostname);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
-  }
-
-  async function cloneRepo() {
-    setPending(true);
-    setMessage(null);
-    const response = await fetch("/api/boxes/clone", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url }),
-    });
-    const body = (await response.json()) as { error?: string; clone?: { path: string } };
-    setPending(false);
-    if (!response.ok) {
-      setMessage(body.error ?? "Clone failed");
-      return;
-    }
-    setCloneOpen(false);
-    setUrl("");
-    window.location.reload();
   }
 
   async function cancel() {
@@ -139,43 +122,19 @@ export function DashboardView() {
         {box.error ? <p className="mt-3 text-sm danger">{box.error}</p> : null}
       </section>
 
-      {running && signedIn === false ? (
+      {running && signedIn !== null ? (
         <Link href="/start" className="glass glass-live mt-3 flex items-center justify-between gap-4 p-6 sm:p-8">
           <span>
-            <span className="block text-lg font-semibold tracking-tight">Finish setup</span>
-            <span className="muted mt-1 block text-sm">Sign in to Claude or ChatGPT. Two taps, no terminal.</span>
+            <span className="block text-lg font-semibold tracking-tight">{signedIn ? "Start a task" : "Finish setup"}</span>
+            <span className="muted mt-1 block text-sm">
+              {signedIn ? "Tell Claude what to build. It keeps working when you close this tab." : "Sign in to Claude or ChatGPT. Two taps, no terminal."}
+            </span>
           </span>
-          <span className="btn btn-sm shrink-0">Continue</span>
+          <span className="btn btn-sm shrink-0">{signedIn ? "Start" : "Continue"}</span>
         </Link>
       ) : null}
 
-      {running ? (
-        <section className="glass mt-3 p-6 sm:p-8">
-          <h2 className="text-lg font-semibold tracking-tight">Start here</h2>
-          <ol className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-            <li className="rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-4 py-3">
-              <Link href="/start" className="font-medium underline-offset-2 hover:underline">
-                1. Connect your AI
-              </Link>
-              <span className="muted mt-1 block">
-                Sign in to Claude or ChatGPT with your own plan. One time only.
-              </span>
-            </li>
-            <li className="rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-4 py-3">
-              <span className="font-medium">2. Bring your project</span>
-              <span className="muted mt-1 block">
-                Tap GitHub to copy in a public repo, or just ask Claude to start a new app in the Terminal.
-              </span>
-            </li>
-            <li className="rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-4 py-3">
-              <span className="font-medium">3. Close your laptop</span>
-              <span className="muted mt-1 block">
-                Your box keeps working. Come back from any browser or your phone. App shows what you are building.
-              </span>
-            </li>
-          </ol>
-        </section>
-      ) : null}
+      {running && client && boxStatus && signedIn ? <SessionsCard client={client} status={boxStatus} onStatus={setBoxStatus} /> : null}
 
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
         {actions.map((action) => (
@@ -187,15 +146,15 @@ export function DashboardView() {
             </span>
           </Link>
         ))}
-        <button type="button" className="glass action-card" onClick={() => setCloneOpen(true)}>
+        <Link href="/start?add=github" className="glass action-card">
           <span className="icon-blob">
             <GitBranch className="h-6 w-6" />
           </span>
           <span>
             <span className="block font-medium tracking-tight">GitHub</span>
-            <span className="muted block max-w-full truncate text-sm">{box.clone?.path ?? "Clone"}</span>
+            <span className="muted block text-sm">Bring a repo</span>
           </span>
-        </button>
+        </Link>
         <button type="button" className="glass action-card opacity-80" onClick={() => void cancel()}>
           <span className="icon-blob">
             <span className="text-lg leading-none">€</span>
@@ -208,28 +167,6 @@ export function DashboardView() {
       </div>
       {message ? <p className="muted mt-4 text-sm">{message}</p> : null}
       {error ? <p className="muted mt-4 text-sm">{error}</p> : null}
-
-      <Dialog open={cloneOpen} onOpenChange={setCloneOpen}>
-        <DialogContent title="Clone" description="Public GitHub repository.">
-          <form
-            className="grid gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void cloneRepo();
-            }}
-          >
-            <Input
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://github.com/you/repo"
-              aria-label="Repository URL"
-              autoComplete="off"
-            />
-            <Button disabled={pending || !url.trim()}>Clone</Button>
-            {message ? <p className="text-sm danger">{message}</p> : null}
-          </form>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
         <DialogContent title="Cancel subscription?" description="Your box will be destroyed.">

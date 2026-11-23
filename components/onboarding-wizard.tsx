@@ -1,6 +1,17 @@
 "use client";
 
 import { OrbitIcon, SparkIcon } from "@/components/icons";
+import {
+  ProjectStep,
+  StartedView,
+  TaskStep,
+  UpdateBanner,
+  UpdateGate,
+  Waiting,
+  type Picked,
+  type ProjectMode,
+  type Started,
+} from "@/components/start-steps";
 import { TerminalPane } from "@/components/terminal-pane";
 import type { TerminalHandle } from "@/components/mock-terminal";
 import { Button } from "@/components/ui/button";
@@ -11,6 +22,8 @@ import {
   connectBox,
   LATEST_AGENT_VERSION,
   planLabel,
+  TASKS_AGENT_VERSION,
+  validProjectName,
   type BoxClient,
   type BoxProblem,
   type BoxStatus,
@@ -18,7 +31,7 @@ import {
   type Tool,
 } from "@/lib/box-client";
 import { SUPPORT_EMAIL } from "@/lib/links";
-import { Check, ChevronLeft, Copy, ExternalLink, Loader2, Smartphone, Terminal } from "lucide-react";
+import { Check, ChevronLeft, Copy, ExternalLink, Loader2, Terminal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -30,19 +43,24 @@ const NAMES: Record<Tool, { name: string; product: string; plans: string }> = {
 
 const ACTIVE = new Set(["starting", "open_url", "waiting_code", "verifying"]);
 
+type Stage = "signin" | "project" | "task" | "done";
+
 export function OnboardingWizard({ initialTool }: { initialTool?: Tool }) {
   const router = useRouter();
   const [client, setClient] = useState<BoxClient | null>(null);
   const [status, setStatus] = useState<BoxStatus | null>(null);
   const [problem, setProblem] = useState<BoxProblem | null>(null);
   const [tool, setTool] = useState<Tool>(initialTool ?? "claude");
+  const [stage, setStage] = useState<Stage>("signin");
+  const [picked, setPicked] = useState<Picked | null>(null);
+  const [started, setStarted] = useState<Started | null>(null);
+  const [projectMode, setProjectMode] = useState<ProjectMode>("choose");
   const [starting, setStarting] = useState(false);
   const [sending, setSending] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [copied, setCopied] = useState(false);
-  const [updating, setUpdating] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const popup = useRef<Window | null>(null);
   const opened = useRef<string | null>(null);
@@ -61,7 +79,8 @@ export function OnboardingWizard({ initialTool }: { initialTool?: Tool }) {
     [router],
   );
 
-  // First load: connect, read the box state once.
+  // First load: connect, read the box state once, and pick where to start.
+  // /start?step=task&project=<name> opens the task step; /start?add=github the repo form.
   useEffect(() => {
     let cancel = false;
     connectBox()
@@ -70,8 +89,25 @@ export function OnboardingWizard({ initialTool }: { initialTool?: Tool }) {
         if (cancel) return;
         setClient(next);
         setStatus(first);
-        if (first.login && ACTIVE.has(first.login.phase)) setTool(first.login.tool);
-        else if (!pickedTool.current && !first.claude.loggedIn && first.codex.loggedIn) setTool("codex");
+        const params = new URLSearchParams(window.location.search);
+        const anySignedIn = first.claude.loggedIn || first.codex.loggedIn;
+        const active = first.login && ACTIVE.has(first.login.phase) && first.login.tool !== "github" ? first.login.tool : null;
+        if (active === "claude" || active === "codex") {
+          setTool(active);
+          setStage("signin");
+        } else {
+          if (!pickedTool.current && !first.claude.loggedIn && first.codex.loggedIn) setTool("codex");
+          if (anySignedIn && !initialTool) {
+            const project = params.get("project");
+            if (params.get("step") === "task" && validProjectName(project)) {
+              setPicked({ project, kind: "existing" });
+              setStage("task");
+            } else {
+              if (params.get("add") === "github") setProjectMode("github");
+              setStage("project");
+            }
+          }
+        }
       })
       .catch((reason) => {
         if (!cancel) fail(reason);
@@ -79,11 +115,11 @@ export function OnboardingWizard({ initialTool }: { initialTool?: Tool }) {
     return () => {
       cancel = true;
     };
-  }, [fail, attempt]);
+  }, [fail, attempt, initialTool]);
 
   const login: LoginState | null = status?.login?.tool === tool ? status.login : null;
   const phase = login?.phase ?? null;
-  const waiting = starting || (phase !== null && ACTIVE.has(phase));
+  const waiting = stage === "signin" && (starting || (phase !== null && ACTIVE.has(phase)));
 
   // Poll only while a sign-in is in flight, gently, and never in a hidden tab.
   useEffect(() => {
@@ -212,30 +248,21 @@ export function OnboardingWizard({ initialTool }: { initialTool?: Tool }) {
     router.push("/terminal");
   }
 
-  async function updateBox() {
-    if (!client) return;
-    setUpdating(true);
-    try {
-      await client.update();
-    } catch (reason) {
-      fail(reason);
-    }
-    // The agent restarts during the update. Check again in a little while.
-    window.setTimeout(() => {
-      setUpdating(false);
-      setAttempt((value) => value + 1);
-    }, 25_000);
-  }
-
   function pick(next: Tool) {
     pickedTool.current = true;
     setTool(next);
     setError(null);
   }
 
+  const onPicked = useCallback((next: Picked) => {
+    setPicked(next);
+    setStage("task");
+  }, []);
+
   const names = NAMES[tool];
   const toolStatus = status?.[tool];
   const connected = Boolean(toolStatus?.loggedIn) && !waiting;
+  const needsUpdate = Boolean(status && status.version < TASKS_AGENT_VERSION);
 
   if (problem === "legacy") return <LegacyFlow tool={tool} onPick={pick} />;
 
@@ -246,7 +273,7 @@ export function OnboardingWizard({ initialTool }: { initialTool?: Tool }) {
           <Link href="/dashboard" className="icon-btn -ml-2" aria-label="Dashboard">
             <ChevronLeft className="h-5 w-5" />
           </Link>
-          <Steps current={connected ? 2 : 1} />
+          <Steps current={stage === "signin" ? 1 : stage === "project" ? 2 : 3} done={stage === "done"} />
         </div>
 
         <section className="glass px-6 py-8 sm:px-10 sm:py-10">
@@ -258,25 +285,52 @@ export function OnboardingWizard({ initialTool }: { initialTool?: Tool }) {
                 setAttempt((value) => value + 1);
               }}
             />
-          ) : !status ? (
+          ) : !status || !client ? (
             <div className="grid place-items-center py-16" aria-live="polite">
               <Loader2 className="muted h-6 w-6 animate-spin" aria-label="Checking your box" />
             </div>
+          ) : stage !== "signin" && needsUpdate ? (
+            <UpdateGate client={client} onStatus={setStatus} />
+          ) : stage === "project" ? (
+            <ProjectStep client={client} mode={projectMode} onMode={setProjectMode} onPicked={onPicked} />
+          ) : stage === "task" && picked ? (
+            <TaskStep
+              client={client}
+              status={status}
+              picked={picked}
+              onChangeProject={() => {
+                setProjectMode("choose");
+                setStage("project");
+              }}
+              onSignIn={() => setStage("signin")}
+              onStarted={(next) => {
+                setStarted(next);
+                setStage("done");
+              }}
+            />
+          ) : stage === "done" && started ? (
+            <StartedView
+              started={started}
+              onAnother={() => {
+                setPicked({ project: started.project, kind: "existing" });
+                setStage("task");
+              }}
+            />
           ) : (
             <>
               <ToolSwitch tool={tool} onPick={pick} disabled={starting || sending} status={status} />
 
-              {status.version < LATEST_AGENT_VERSION ? (
-                <div className="mt-5 flex items-center justify-between gap-3 rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-4 py-3 text-sm">
-                  <span>{updating ? "Updating your box. About a minute." : "A box update is ready."}</span>
-                  <Button size="sm" variant="ghost" disabled={updating} onClick={() => void updateBox()}>
-                    {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : "Update"}
-                  </Button>
-                </div>
-              ) : null}
+              {status.version < LATEST_AGENT_VERSION ? <UpdateBanner client={client} onStatus={setStatus} /> : null}
 
               {connected ? (
-                <Connected tool={tool} email={toolStatus?.email} plan={toolStatus?.plan} launching={launching} onLaunch={() => void launch()} />
+                <Connected
+                  tool={tool}
+                  email={toolStatus?.email}
+                  plan={toolStatus?.plan}
+                  launching={launching}
+                  onContinue={() => setStage("project")}
+                  onLaunch={() => void launch()}
+                />
               ) : toolStatus && !toolStatus.installed ? (
                 <div className="mt-8 text-center">
                   <h1 className="headline text-3xl">{names.product} is missing</h1>
@@ -301,7 +355,7 @@ export function OnboardingWizard({ initialTool }: { initialTool?: Tool }) {
                   {phase === "starting" || (starting && !login) ? (
                     <Waiting label="Getting your sign-in link" />
                   ) : phase === "open_url" && login ? (
-                    <CodexCode login={login} copied={copied} onCopy={() => void copyAndOpen(login)} demo={client?.demo} />
+                    <CodexCode login={login} copied={copied} onCopy={() => void copyAndOpen(login)} demo={client.demo} />
                   ) : (phase === "waiting_code" || phase === "verifying") && login ? (
                     <ClaudeCode
                       login={login}
@@ -309,7 +363,7 @@ export function OnboardingWizard({ initialTool }: { initialTool?: Tool }) {
                       onCode={setCode}
                       sending={sending || phase === "verifying"}
                       onSubmit={() => void submitCode()}
-                      demo={client?.demo}
+                      demo={client.demo}
                     />
                   ) : (
                     <div className="mt-8 grid gap-3">
@@ -318,7 +372,7 @@ export function OnboardingWizard({ initialTool }: { initialTool?: Tool }) {
                           {login.message}
                         </p>
                       ) : null}
-                      <Button className="btn-lg w-full" onClick={() => void start()} disabled={!client || starting}>
+                      <Button className="btn-lg w-full" onClick={() => void start()} disabled={starting}>
                         {phase === "error" ? "Try again" : `Sign in with ${names.name}`}
                       </Button>
                     </div>
@@ -356,22 +410,22 @@ export function OnboardingWizard({ initialTool }: { initialTool?: Tool }) {
   );
 }
 
-function Steps({ current }: { current: 1 | 2 }) {
-  const items = ["Sign in", "Start building"];
+function Steps({ current, done = false }: { current: 1 | 2 | 3; done?: boolean }) {
+  const items = ["Sign in", "Project", "Task"];
   return (
-    <ol className="flex items-center gap-3 text-sm" aria-label="Setup steps">
+    <ol className="flex items-center gap-2.5 text-sm sm:gap-3" aria-label="Setup steps">
       {items.map((label, index) => {
         const n = index + 1;
-        const done = n < current;
-        const active = n === current;
+        const complete = n < current || done;
+        const active = n === current && !done;
         return (
-          <li key={label} className={`flex items-center gap-2 ${active || done ? "" : "muted"}`} aria-current={active ? "step" : undefined}>
+          <li key={label} className={`flex items-center gap-1.5 sm:gap-2 ${active || complete ? "" : "muted"}`} aria-current={active ? "step" : undefined}>
             <span
               className={`step-num h-6 w-6 text-xs ${active ? "border-transparent [background:var(--accent)] text-[var(--accent-fg)]" : ""}`}
             >
-              {done ? <Check className="h-3.5 w-3.5" aria-hidden /> : n}
+              {complete ? <Check className="h-3.5 w-3.5" aria-hidden /> : n}
             </span>
-            <span className="font-medium">{label}</span>
+            <span className={`font-medium ${active ? "" : "max-sm:hidden"}`}>{label}</span>
           </li>
         );
       })}
@@ -400,15 +454,6 @@ function ToolSwitch({ tool, onPick, disabled, status }: { tool: Tool; onPick: (t
           </button>
         ))}
       </div>
-    </div>
-  );
-}
-
-function Waiting({ label }: { label: string }) {
-  return (
-    <div className="mt-8 flex items-center justify-center gap-2 text-sm" aria-live="polite">
-      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-      <span className="muted">{label}</span>
     </div>
   );
 }
@@ -507,12 +552,14 @@ function Connected({
   email,
   plan,
   launching,
+  onContinue,
   onLaunch,
 }: {
   tool: Tool;
   email?: string;
   plan?: string;
   launching: boolean;
+  onContinue: () => void;
   onLaunch: () => void;
 }) {
   const names = NAMES[tool];
@@ -524,20 +571,13 @@ function Connected({
       </span>
       <h1 className="headline mt-5 text-3xl">{names.name} is connected</h1>
       {detail ? <p className="muted mt-2 text-sm">{detail}</p> : null}
-      <Button className="btn-lg mt-8 w-full" onClick={onLaunch} disabled={launching}>
-        {launching ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
-        Start {names.product}
+      <Button className="btn-lg mt-8 w-full" onClick={onContinue}>
+        Continue
       </Button>
-      <p className="muted mt-4 text-sm">
-        It opens in your projects folder. Tell it what to build.
-      </p>
-      <div className="mt-6 flex items-start gap-3 rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-4 py-3 text-left text-sm">
-        <Smartphone className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-        <span>
-          <span className="font-medium">Runs even when you close this tab.</span>{" "}
-          <span className="muted">Check in from your phone anytime. Next up here: one tap to start a project or bring in a GitHub repo.</span>
-        </span>
-      </div>
+      <button type="button" className="btn-quiet mt-4 inline-flex items-center gap-1.5 text-sm" onClick={onLaunch} disabled={launching}>
+        {launching ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+        Or open {names.product} in the terminal
+      </button>
     </div>
   );
 }

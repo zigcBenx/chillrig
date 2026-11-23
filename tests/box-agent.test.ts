@@ -163,7 +163,7 @@ describe("box agent and update script", () => {
   const install = readFileSync("install.sh", "utf8");
 
   it("spawns argument arrays, never a shell with user input, and never logs", () => {
-    assert.match(agent, /AGENT_VERSION = 2/);
+    assert.match(agent, /AGENT_VERSION = 3/);
     assert.doesNotMatch(agent, /shell:\s*true/);
     assert.doesNotMatch(agent, /execSync|exec\(`|child_process"\)\.exec/);
     assert.doesNotMatch(agent, /console\.(log|info|debug|warn|error)/);

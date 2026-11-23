@@ -49,7 +49,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 # Fetch everything first and check it, so a bad download never replaces a working agent.
-for file in agent.mjs login-parse.mjs attach.sh; do
+for file in agent.mjs login-parse.mjs tasks.mjs attach.sh task.sh; do
   if [[ -n "${CHILLRIG_ASSETS_DIR:-}" ]]; then
     cp "${CHILLRIG_ASSETS_DIR}/${file}" "${tmp}/${file}"
   else
@@ -59,7 +59,9 @@ for file in agent.mjs login-parse.mjs attach.sh; do
 done
 node --check "${tmp}/agent.mjs"
 node --check "${tmp}/login-parse.mjs"
+node --check "${tmp}/tasks.mjs"
 bash -n "${tmp}/attach.sh"
+bash -n "${tmp}/task.sh"
 grep -q "AGENT_VERSION" "${tmp}/agent.mjs"
 
 cat > "${tmp}/env" << EOF
@@ -113,6 +115,8 @@ KillMode=process
 WantedBy=multi-user.target
 EOF
 
+# -a: the browser may add ?arg=<session> to pick a task session; attach.sh validates it.
+# Restarting ttyd only drops the browser connections; sessions live in chillrig-tmux.
 cat > "${tmp}/chillrig-ttyd.service" << EOF
 [Unit]
 Description=Chillrig terminal
@@ -127,7 +131,7 @@ WorkingDirectory=${home}
 Environment=HOME=${home}
 Environment=LANG=C.UTF-8
 Environment=PATH=${user_path}
-ExecStart=/usr/local/bin/ttyd -W -i 127.0.0.1 -p 7681 -b /ttyd -m 4 -H X-Chillrig-Auth /opt/chillrig/attach.sh
+ExecStart=/usr/local/bin/ttyd -W -a -i 127.0.0.1 -p 7681 -b /ttyd -m 4 -H X-Chillrig-Auth /opt/chillrig/attach.sh
 Restart=on-failure
 RestartSec=2
 KillMode=process
@@ -149,6 +153,9 @@ agent_changed=0
 ttyd_changed=0
 tmux_changed=0
 if put "${tmp}/login-parse.mjs" /opt/chillrig/login-parse.mjs 0644; then agent_changed=1; fi
+if put "${tmp}/tasks.mjs" /opt/chillrig/tasks.mjs 0644; then agent_changed=1; fi
+# Each task session runs task.sh when it starts; replacing it never touches running ones.
+put "${tmp}/task.sh" /opt/chillrig/task.sh 0755 || true
 if put "${tmp}/agent.mjs" /opt/chillrig/agent.mjs 0644; then agent_changed=1; fi
 if put "${tmp}/env" /etc/chillrig/env 0644; then agent_changed=1; fi
 if put "${tmp}/chillrig-agent.service" /etc/systemd/system/chillrig-agent.service 0644; then agent_changed=1; fi
