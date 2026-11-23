@@ -21,6 +21,7 @@
   "vars": {
     "CHILLRIG_MOCK": "false",
     "CHILLRIG_EMAIL_LOGIN": "1",
+    "CHILLRIG_OAUTH": "1",
     "HETZNER_MAX_MONTHLY_EUR": "12",
     "NEXT_PUBLIC_APP_URL": "https://chillrig.jqfdpr2e.workers.dev",
     "CHILLRIG_CONTROL_PLANE": "https://chillrig.jqfdpr2e.workers.dev"
