@@ -46,14 +46,42 @@ export type Session = {
   running: boolean;
   exitCode: number | null;
   state: SessionState;
+  /** The tool's last message in plain words (agent v4). The raw pane stays in the terminal. */
+  summary: string | null;
   lastLines: string[];
 };
 export type NewSession = { project: string; prompt: string; tool: Tool; autoApprove: boolean };
 
+/**
+ * The live preview: one project's dev server behind https://<box>/.
+ * none: never started. error: no known start command (message says what to do).
+ * protected: false on a box whose Caddy predates preview protection (it is public then).
+ */
+export type PreviewState = "none" | "starting" | "running" | "stopped" | "error";
+export type PreviewStatus = {
+  project: string | null;
+  port: number;
+  state: PreviewState;
+  public: boolean;
+  protected: boolean;
+  /** The preview's own terminal session exists (/terminal?session=chillrig-preview). */
+  output?: boolean;
+  message?: string;
+};
+
 /** The agent version this UI is built for. Older v2+ agents can update themselves. */
-export const LATEST_AGENT_VERSION = 3;
-/** Projects and task sessions need agent v3. */
-export const TASKS_AGENT_VERSION = 3;
+export const LATEST_AGENT_VERSION = 4;
+/** Task cards with summaries and the live preview need agent v4. */
+export const TASKS_AGENT_VERSION = 4;
+
+/**
+ * Opens the preview on the box. The control plane checks the session, issues a ticket and
+ * sends the browser to the box, which sets its own cookie (and starts the project's dev
+ * server). Use it as a plain link, so no popup blocker gets in the way.
+ */
+export function previewHref(project?: string | null) {
+  return validProjectName(project) ? `/api/boxes/preview?project=${encodeURIComponent(project)}` : "/api/boxes/preview";
+}
 
 export type BoxProblem = "no-box" | "signed-out" | "unreachable" | "legacy" | "blocked" | "request";
 
@@ -84,9 +112,12 @@ export interface BoxClient {
   createProject(name: string, template: Template): Promise<{ project: string }>;
   /** Resolves at once when ~/projects/<repo> already exists ({ existing: true }). */
   cloneProject(url: string): Promise<{ project: string; existing?: boolean }>;
-  sessions(): Promise<Session[]>;
+  /** Task sessions and the preview, in one call (the dashboard polls it). */
+  sessions(): Promise<{ sessions: Session[]; preview: PreviewStatus | null }>;
   startSession(input: NewSession): Promise<{ name: string }>;
   stopSession(name: string): Promise<void>;
+  preview(): Promise<PreviewStatus>;
+  setPreviewPublic(value: boolean): Promise<PreviewStatus>;
 }
 
 type Ticket = { ticket: string; hostname: string; demo: boolean; at: number };
@@ -202,7 +233,8 @@ class LiveBoxClient implements BoxClient {
   }
 
   async sessions() {
-    return (await this.call<{ sessions: Session[] }>("GET", "/sessions")).sessions;
+    const data = await this.call<{ sessions: Session[]; preview?: PreviewStatus }>("GET", "/sessions");
+    return { sessions: data.sessions, preview: data.preview ?? null };
   }
 
   startSession(input: NewSession) {
@@ -213,6 +245,14 @@ class LiveBoxClient implements BoxClient {
     if (!validSessionName(name)) throw new BoxError("request", "Unknown task", 400);
     await this.call("POST", `/sessions/${encodeURIComponent(name)}/stop`, {});
   }
+
+  preview() {
+    return this.call<PreviewStatus>("GET", "/preview");
+  }
+
+  async setPreviewPublic(value: boolean) {
+    return (await this.call<{ preview: PreviewStatus }>("POST", "/preview/public", { public: value })).preview;
+  }
 }
 
 /** Mock mode: the same flows with no box. Nothing leaves the browser. */
@@ -221,7 +261,8 @@ const DEMO_KEY = "chillrig-demo-box";
 type DemoState = {
   signedIn: Record<LoginTool, boolean>;
   projects: Project[];
-  sessions: Array<Omit<Session, "state" | "lastLines" | "running"> & { stoppedAt?: number }>;
+  sessions: Array<Omit<Session, "state" | "summary" | "lastLines" | "running"> & { stoppedAt?: number }>;
+  previewPublic: boolean;
 };
 
 class DemoBoxClient implements BoxClient {
@@ -230,13 +271,14 @@ class DemoBoxClient implements BoxClient {
   private job: (ProjectJob & { doneAt: number }) | null = null;
 
   private read(): DemoState {
-    const empty: DemoState = { signedIn: { claude: false, codex: false, github: false }, projects: [], sessions: [] };
+    const empty: DemoState = { signedIn: { claude: false, codex: false, github: false }, projects: [], sessions: [], previewPublic: false };
     try {
       const saved = JSON.parse(sessionStorage.getItem(DEMO_KEY) || "{}") as Partial<DemoState>;
       return {
         signedIn: { ...empty.signedIn, ...(saved.signedIn ?? {}) },
         projects: saved.projects ?? [],
         sessions: saved.sessions ?? [],
+        previewPublic: saved.previewPublic === true,
       };
     } catch {
       return empty;
@@ -335,7 +377,32 @@ class DemoBoxClient implements BoxClient {
     return { project };
   }
 
-  async sessions(): Promise<Session[]> {
+  async sessions() {
+    const sessions = this.demoSessions();
+    return { sessions, preview: this.demoPreview(sessions) };
+  }
+
+  private demoPreview(sessions: Session[]): PreviewStatus {
+    const latest = sessions[0];
+    return {
+      project: latest?.project ?? null,
+      port: 3000,
+      state: !latest ? "none" : latest.state === "working" ? "starting" : "running",
+      public: this.read().previewPublic,
+      protected: true,
+    };
+  }
+
+  async preview() {
+    return this.demoPreview(this.demoSessions());
+  }
+
+  async setPreviewPublic(value: boolean) {
+    this.write((state) => (state.previewPublic = value));
+    return this.demoPreview(this.demoSessions());
+  }
+
+  private demoSessions(): Session[] {
     const now = Date.now();
     return this.read()
       .sessions.filter((item) => !item.stoppedAt)
@@ -351,7 +418,11 @@ class DemoBoxClient implements BoxClient {
           ...(age > 12_000 ? [`● Bash(npm run build)`, `  ⎿  ✓ Compiled successfully`] : []),
           state === "working" ? `✻ Working… (${Math.round(age / 1000)}s · esc to interrupt)` : `● Done. Open the App tab to see it. (${name}, demo)`,
         ];
-        return { ...item, running: true, state, lastLines: lines.slice(-8) };
+        const summary =
+          state === "working"
+            ? null
+            : `I built the page and checked it with curl. Open the preview to see it. (${name}, demo)`;
+        return { ...item, running: true, state, summary, lastLines: lines.slice(-8) };
       })
       .sort((a, b) => b.startedAt - a.startedAt);
   }

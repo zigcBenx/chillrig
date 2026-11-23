@@ -7,6 +7,7 @@ import {
   cleanPrompt,
   findGhDevice,
   lastLines,
+  lastMessage,
   makeSessionName,
   parseGhLogin,
   parseRepo,
@@ -19,6 +20,69 @@ import {
   validProject,
   validSession,
 } from "../public/box/tasks.mjs";
+
+// The tail of the first real task's pane (Claude Code 2.1.330, 200 columns, acceptEdits).
+const CLAUDE_DONE = [
+  " ▐▛███▜▌   Claude Code v2.1.330",
+  "▝▜█████▛▘  Opus 4.7 · Claude Max",
+  "  ▘▘ ▝▝    ~/projects/tes-chillrig",
+  "",
+  '> simple page that just have text saying "Hello this is ChillRig test"',
+  "",
+  "● Read(app/page.tsx)",
+  "  ⎿  Read 65 lines",
+  "",
+  "● Update(app/page.tsx)",
+  "  ⎿  Updated app/page.tsx with 5 additions and 62 removals",
+  '        1 -  import Image from "next/image";',
+  "        2 -",
+  "        3    export default function Home() {",
+  "        4      return (",
+  '        5 -      <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center">',
+  '        5 +      <main className="flex min-h-screen items-center justify-center">',
+  '        6 +        <h1 className="text-3xl font-semibold">Hello this is ChillRig test</h1>',
+  "        7 +      </main>",
+  "",
+  "● Bash(npx tsc --noEmit)",
+  "  ⎿  (No content)",
+  "  ⎿  (files that changed while this command ran: next-env.d.ts, tsconfig.tsbuildinfo)",
+  "",
+  "● I replaced the default Next.js starter in app/page.tsx with a single centered heading that says",
+  '  "Hello this is ChillRig test", and removed the unused next/image import. The type check passes.',
+  "",
+  "  I haven't opened the page in a browser; run npm run dev and go to http://localhost:3000 to see",
+  "  it.",
+  "",
+  "─".repeat(120),
+  "❯ ",
+  "─".repeat(120),
+  "  ⏵⏵ accept edits on (shift+tab to cycle)",
+  "",
+].join("\n");
+
+// Codex 0.171.0 inline (--no-alt-screen): commands, an edit with its diff, then the answer.
+const CODEX_DONE = [
+  "› add a heading to the home page",
+  "",
+  "• Explored",
+  "  └ Read page.tsx",
+  "",
+  "• Edited app/page.tsx (+3 -40)",
+  "    1 -import Image from \"next/image\";",
+  "    1 +export default function Home() {",
+  "",
+  "• Ran curl -sI http://127.0.0.1:3000",
+  "  └ HTTP/1.1 200 OK",
+  "",
+  "─ Worked for 42s ─────────────────────────────",
+  "",
+  "• Added a single heading to the home page. The dev server is running on port 3000 and",
+  "  answers with 200.",
+  "",
+  "› Ask Codex to do anything",
+  "",
+  "  100% context left · ? for shortcuts",
+].join("\n");
 
 // Captured from `gh auth login -h github.com -p https -w </dev/null` (gh 2.46) in tmux.
 const GH_NO_TTY = `! First copy your one-time code: 1A0A-7334
@@ -198,6 +262,36 @@ describe("task sessions", () => {
     assert.deepEqual(lastLines("\x1b]0;title\x07ok\r\n\x1b[2Kdone"), ["ok", "done"]);
   });
 
+  it("reads the tool's last message, not the diff, the tool trace or the chrome", () => {
+    // The pane from the first live task on calm-quartz: Claude edited app/page.tsx, ran
+    // a check, then wrote its summary. The old card showed the diff and the changed-files
+    // note from this tail; the summary is what it should show.
+    assert.equal(
+      lastMessage(CLAUDE_DONE),
+      'I replaced the default Next.js starter in app/page.tsx with a single centered heading that says "Hello this is ChillRig test", and removed the unused next/image import. The type check passes.\n' +
+        "I haven't opened the page in a browser; run npm run dev and go to http://localhost:3000 to see it.",
+    );
+    assert.ok(lastLines(CLAUDE_DONE).some((line) => /files that changed while this command ran/.test(line)));
+    assert.doesNotMatch(lastMessage(CLAUDE_DONE) ?? "", /files that changed|\d+ [+-] |⎿|shift\+tab|~\/projects/);
+  });
+
+  it("reads Codex's last message and skips its commands and edits", () => {
+    assert.equal(lastMessage(CODEX_DONE), "Added a single heading to the home page. The dev server is running on port 3000 and answers with 200.");
+  });
+
+  it("gives null while there is only tool output, and keeps a long message short", () => {
+    assert.equal(lastMessage("● Write(app/page.tsx)\n  ⎿  Wrote 3 lines to app/page.tsx\n\n✻ Working… (3s · esc to interrupt)\n"), null);
+    assert.equal(lastMessage("● Read 3 files (ctrl+o to expand)\n"), null);
+    assert.equal(lastMessage(""), null);
+    // Prose that mentions a call is still prose: "I updated Home(" is not a tool name.
+    assert.equal(lastMessage("● I updated Home() to render the heading.\n"), "I updated Home() to render the heading.");
+    const long = lastMessage(`● ${"word ".repeat(200)}\n`) ?? "";
+    assert.ok(long.length <= 320);
+    assert.ok(long.endsWith("…"));
+    const many = lastMessage("● One.\n\n  Two.\n\n  Three.\n\n  Four.\n");
+    assert.equal(many, "One.\nTwo.\nThree.");
+  });
+
   it("tells working, waiting and finished apart", () => {
     assert.equal(sessionState(true, "● Write(x)\n✻ Thinking… (12s · esc to interrupt)\n❯ \n"), "working");
     assert.equal(sessionState(true, "• Working (5s • Esc to interrupt)"), "working");
@@ -218,6 +312,11 @@ describe("task scripts", () => {
     assert.match(task, /"\$tool" != "claude" && "\$tool" != "codex"/);
     assert.match(agent, /"new-session", "-d", "-s", name, [^\n]*"--", "\/bin\/bash", taskScript, name, tool, \.\.\.toolArgs/);
     assert.doesNotMatch(agent, /new-session[^\n]*prompt/);
+    // The preview note is added to the saved prompt file, still one argument for task.sh.
+    assert.match(agent, /const full = taskPrompt\(prompt, /);
+    assert.match(agent, /JSON\.stringify\(\{ name, tool, cwd, prompt: full, autoApprove \}\)/);
+    // The preview dev command is argv after a fixed script, never a string with user input.
+    assert.match(agent, /"--", "\/bin\/bash", "-c", PREVIEW_SCRIPT, PREVIEW_SESSION, plan\.install \? "1" : "0", \.\.\.plan\.command/);
     assert.match(agent, /skipDangerousModePermissionPrompt/);
     assert.match(agent, /hasTrustDialogAccepted/);
     assert.match(agent, /trust_level/);
@@ -228,8 +327,10 @@ describe("task scripts", () => {
     assert.match(attach, /has-session -t "=\$\{1\}"/);
     assert.match(attach, /attach -t "=\$\{target\}"/);
     assert.match(update, /ttyd -W -a /);
-    assert.match(update, /for file in agent\.mjs login-parse\.mjs tasks\.mjs attach\.sh task\.sh; do/);
+    assert.match(update, /for file in agent\.mjs login-parse\.mjs tasks\.mjs preview\.mjs attach\.sh task\.sh; do/);
     assert.match(update, /node --check "\$\{tmp\}\/tasks\.mjs"/);
+    assert.match(update, /node --check "\$\{tmp\}\/preview\.mjs"/);
+    assert.match(update, /put "\$\{tmp\}\/preview\.mjs" \/opt\/chillrig\/preview\.mjs 0644/);
     assert.match(update, /bash -n "\$\{tmp\}\/task\.sh"/);
   });
 });

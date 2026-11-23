@@ -166,7 +166,7 @@ describe("box agent and update script", () => {
   const install = readFileSync("install.sh", "utf8");
 
   it("spawns argument arrays, never a shell with user input, and never logs", () => {
-    assert.match(agent, /AGENT_VERSION = 3/);
+    assert.match(agent, /AGENT_VERSION = 4/);
     assert.doesNotMatch(agent, /shell:\s*true/);
     assert.doesNotMatch(agent, /execSync|exec\(`|child_process"\)\.exec/);
     assert.doesNotMatch(agent, /console\.(log|info|debug|warn|error)/);
@@ -182,8 +182,13 @@ describe("box agent and update script", () => {
     assert.match(update, /tmux new-session -d -s chillrig/);
     assert.match(update, /exit-empty off/);
     assert.equal((update.match(/^KillMode=process$/gm) ?? []).length, 3);
-    assert.doesNotMatch(update, /systemctl restart chillrig-tmux/);
-    assert.doesNotMatch(update, /ufw|caddy reload|auth\.caddy|Caddyfile/);
+    assert.doesNotMatch(update, /systemctl restart chillrig-tmux|kill-session|kill-server/);
+    // Caddy changes only in migrate_caddy: validated first, rolled back if the reload fails.
+    // It never rewrites the auth file, the firewall or anything in ~/projects.
+    assert.doesNotMatch(update, /ufw|> *\/etc\/chillrig\/auth\.caddy|projects/);
+    assert.ok(update.indexOf("caddy validate") < update.indexOf("caddy reload"));
+    assert.match(update, /putting the old one back/);
+    assert.ok(update.indexOf("systemctl restart chillrig-agent.service") < update.lastIndexOf("migrate_caddy"));
     assert.match(update, /node --check/);
     assert.match(install, /update\.sh/);
     assert.match(install, /CHILLRIG_UPDATE_NO_START=1/);

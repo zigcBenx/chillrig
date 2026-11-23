@@ -1,18 +1,40 @@
 "use client";
 
+import { PreviewAccess, previewStateLabel } from "@/components/preview-access";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAccount } from "@/components/use-account";
+import { connectBox, previewHref, type BoxClient, type PreviewStatus } from "@/lib/box-client";
 import { ChevronLeft, ExternalLink } from "lucide-react";
 import Link from "next/link";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 export function PreviewView() {
   const { data } = useAccount(8000);
   const [port, setPort] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const shownPort = port ?? String(data?.box?.appPort ?? 3000);
+  const [client, setClient] = useState<BoxClient | null>(null);
+  const [status, setStatus] = useState<PreviewStatus | null>(null);
+  const running = data?.box?.status === "running";
+  const shownPort = port ?? String(status?.port ?? data?.box?.appPort ?? 3000);
+
+  // One look at the preview (public or private, which project). Not a poll.
+  useEffect(() => {
+    if (!running) return;
+    let cancel = false;
+    connectBox()
+      .then(async (next) => {
+        const preview = await next.preview();
+        if (cancel) return;
+        setClient(next);
+        setStatus(preview);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancel = true;
+    };
+  }, [running]);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -26,10 +48,12 @@ export function PreviewView() {
     const body = (await response.json()) as { error?: string };
     setPending(false);
     setMessage(response.ok ? "Saved" : body.error ?? "Could not save");
+    if (response.ok && client) setStatus(await client.preview().catch(() => status));
   }
 
   const hostname = data?.box?.hostname;
-  const preview = data?.previewUrl;
+  // The frame opens through the control plane too: the box sets a cookie made for frames.
+  const preview = data?.previewUrl ? previewHref() : null;
 
   return (
     <main className="flex h-dvh flex-col px-3 pt-20 pb-3">
@@ -45,7 +69,7 @@ export function PreviewView() {
           </div>
           <p className="muted min-w-0 flex-1 truncate text-sm">{hostname ?? "box"}</p>
           {preview ? (
-            <a className="icon-btn" href={preview} target="_blank" rel="noreferrer" aria-label="Open app">
+            <a className="icon-btn" href={previewHref(status?.project)} target="_blank" rel="noopener" aria-label="Open preview">
               <ExternalLink className="h-4 w-4" />
             </a>
           ) : null}
@@ -62,6 +86,15 @@ export function PreviewView() {
             </Button>
           </form>
         </div>
+        {client && status ? (
+          <div className="flex flex-wrap items-start justify-between gap-3 px-4 pb-3">
+            <p className="muted text-sm">
+              {status.project ?? "No project yet"} · {previewStateLabel(status)}
+              {status.state === "error" && status.message ? <span className="block text-xs">{status.message}</span> : null}
+            </p>
+            <PreviewAccess client={client} preview={status} onChange={setStatus} />
+          </div>
+        ) : null}
         <div className="relative min-h-0 flex-1 bg-white/70 dark:bg-black/30">
           {preview ? (
             <iframe title="App preview" src={preview} className="h-full w-full border-0 bg-white" />

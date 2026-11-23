@@ -1,43 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { createServer } from "node:net";
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-
-async function freePort() {
-  return new Promise<number>((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-async function caddyBinary() {
-  const fromPath = spawnSync("bash", ["-lc", "command -v caddy"], { encoding: "utf8" });
-  if (fromPath.status === 0 && fromPath.stdout.trim()) return fromPath.stdout.trim();
-  const cached = "/tmp/caddy";
-  try {
-    await readFile(cached);
-    return cached;
-  } catch {
-    const arch = process.arch === "arm64" ? "arm64" : "amd64";
-    const url = `https://github.com/caddyserver/caddy/releases/download/v2.10.2/caddy_2.10.2_linux_${arch}.tar.gz`;
-    const dir = await mkdtemp(path.join(tmpdir(), "caddy-"));
-    const archive = path.join(dir, "caddy.tgz");
-    const download = spawnSync("curl", ["-fsSL", "-o", archive, url], { encoding: "utf8" });
-    assert.equal(download.status, 0, download.stderr);
-    const extracted = spawnSync("tar", ["-xzf", archive, "-C", dir, "caddy"]);
-    assert.equal(extracted.status, 0);
-    await chmod(path.join(dir, "caddy"), 0o755);
-    return path.join(dir, "caddy");
-  }
-}
+import { caddyBinary, freePort } from "./helpers/caddy";
 
 describe("self-host basic auth", () => {
   it("accepts the right password and rejects a wrong one", async () => {

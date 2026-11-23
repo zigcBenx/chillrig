@@ -513,7 +513,7 @@ export async function setBoxPort(userId: string, value: unknown) {
  */
 export async function probeBoxAgent(userId: string) {
   const box = await runningBox(userId);
-  if (isMockMode()) return { reachable: true, version: 3 };
+  if (isMockMode()) return { reachable: true, version: 4 };
   try {
     const response = await fetch(`https://${boxHostname(box, domainName())}/_chillrig/health`, {
       cache: "no-store",

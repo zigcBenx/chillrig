@@ -6,11 +6,14 @@ import { SessionsCard } from "@/components/sessions-card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useAccount } from "@/components/use-account";
-import { connectBox, type BoxClient, type BoxStatus } from "@/lib/box-client";
+import { connectBox, previewHref, type BoxClient, type BoxStatus } from "@/lib/box-client";
 import { AppWindow, Check, Copy, GitBranch, Terminal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+
+// Sign-in status is looked at again when the tab comes back, at most this often.
+const STATUS_REFRESH_MS = 15_000;
 
 export function DashboardView() {
   const router = useRouter();
@@ -21,23 +24,40 @@ export function DashboardView() {
   const [pending, setPending] = useState(false);
   const [client, setClient] = useState<BoxClient | null>(null);
   const [boxStatus, setBoxStatus] = useState<BoxStatus | null>(null);
+  const [statusFailed, setStatusFailed] = useState(false);
   const running = data?.box?.status === "running";
   const signedIn = boxStatus ? boxStatus.claude.loggedIn || boxStatus.codex.loggedIn : null;
 
   // One look at the box (not a poll): is Claude or ChatGPT signed in, which agent runs?
+  // Looked at again when the tab comes back, so signing in elsewhere shows up here.
   useEffect(() => {
     if (!running) return;
     let cancel = false;
-    connectBox()
-      .then(async (next) => {
-        const status = await next.status();
+    let current: BoxClient | null = null;
+    let lastLook = 0;
+    const look = async () => {
+      lastLook = Date.now();
+      try {
+        current ??= await connectBox();
+        const status = await current.status();
         if (cancel) return;
-        setClient(next);
+        setClient(current);
         setBoxStatus(status);
-      })
-      .catch(() => undefined);
+        setStatusFailed(false);
+      } catch {
+        if (!cancel) setStatusFailed(true);
+      }
+    };
+    const onVisible = () => {
+      if (!document.hidden && Date.now() - lastLook > STATUS_REFRESH_MS) void look();
+    };
+    void look();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
     return () => {
       cancel = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
     };
   }, [running]);
 
@@ -90,11 +110,21 @@ export function DashboardView() {
   }
 
   const box = data.box;
-  const actions = [
-    { href: "/connect/claude", label: "Claude", hint: "Connect", icon: <SparkIcon /> },
-    { href: "/connect/chatgpt", label: "ChatGPT", hint: "Connect", icon: <OrbitIcon /> },
+  // Only what the box says. Until it answers, the hint stays empty instead of guessing.
+  const signInHint = (loggedIn: boolean | undefined): ReactNode =>
+    loggedIn ? (
+      <span className="inline-flex items-center gap-1">
+        <Check className="h-3.5 w-3.5 text-[var(--signal)]" aria-hidden /> Connected
+      </span>
+    ) : loggedIn === false || statusFailed || !running ? (
+      "Connect"
+    ) : (
+      "\u00a0"
+    );
+  const actions: Array<{ href: string; label: string; hint: ReactNode; icon: ReactNode }> = [
+    { href: "/connect/claude", label: "Claude", hint: signInHint(boxStatus?.claude.loggedIn), icon: <SparkIcon /> },
+    { href: "/connect/chatgpt", label: "ChatGPT", hint: signInHint(boxStatus?.codex.loggedIn), icon: <OrbitIcon /> },
     { href: "/terminal", label: "Terminal", hint: "Open", icon: <Terminal className="h-6 w-6" /> },
-    { href: "/preview", label: "App", hint: "Open", icon: <AppWindow className="h-6 w-6" /> },
   ];
 
   return (
@@ -146,6 +176,16 @@ export function DashboardView() {
             </span>
           </Link>
         ))}
+        {/* A plain link: the control plane sends it on to the box with a fresh ticket. */}
+        <a href={previewHref()} target="_blank" rel="noopener" className="glass action-card">
+          <span className="icon-blob">
+            <AppWindow className="h-6 w-6" />
+          </span>
+          <span>
+            <span className="block font-medium tracking-tight">App</span>
+            <span className="muted text-sm">Open preview</span>
+          </span>
+        </a>
         <Link href="/start?add=github" className="glass action-card">
           <span className="icon-blob">
             <GitBranch className="h-6 w-6" />

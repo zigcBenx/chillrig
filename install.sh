@@ -180,6 +180,9 @@ chmod 0644 /etc/chillrig/auth.caddy
 # Shared site body. Boot on :80 so a missing DNS record cannot stop the box.
 # When a domain is set, chillrig-tls swaps in the HTTPS file after the name resolves.
 # __APP_PORT__ stays in the template the agent rewrites; it is not hidden in an import.
+# The app preview imports preview.caddy (update.sh writes it, private by default): the
+# agent checks the preview cookie on localhost, or the file is a comment when public.
+# While nothing answers on the app port, the agent shows a calm "starting" page.
 routes_body=$(cat << 'EOF'
 	encode zstd gzip
 
@@ -202,7 +205,16 @@ routes_body=$(cat << 'EOF'
 	}
 
 	handle {
+		import /etc/chillrig/preview.caddy
 		reverse_proxy 127.0.0.1:__APP_PORT__
+	}
+
+	handle_errors 502 503 504 {
+		@preview not path /_chillrig/* /ttyd/*
+		handle @preview {
+			rewrite * /_chillrig/preview/waiting
+			reverse_proxy 127.0.0.1:7682
+		}
 	}
 EOF
 )

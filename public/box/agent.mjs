@@ -1,17 +1,32 @@
 // Chillrig box agent. Runs as root on 127.0.0.1:7682 behind Caddy, which checks a
 // control-plane ticket (forward_auth) for everything under /_chillrig except /health.
+// It also guards the app preview: Caddy asks /_chillrig/preview/check (on localhost,
+// never the control plane) about the preview cookie on every request to the app.
 // No dependencies. update.sh installs it in /opt/chillrig next to login-parse.mjs.
 //
 // It never stores, logs or returns provider tokens. The login pane is read only to
 // find the sign-in URL, the device code and the result, and only those go back.
 import http from "node:http";
+import net from "node:net";
 import { spawn } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  chmodSync,
+} from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseClaudeStatus, parseGhUser, parseLogin, validateCode, EXIT_MARK } from "./login-parse.mjs";
 import {
   cleanPrompt,
   lastLines,
+  lastMessage,
   makeSessionName,
   parseGhLogin,
   parseRepo,
@@ -26,12 +41,33 @@ import {
   validProject,
   validSession,
 } from "./tasks.mjs";
+import {
+  NO_COMMAND,
+  PREVIEW_COOKIE,
+  PREVIEW_SESSION,
+  previewCommand,
+  previewCookie,
+  previewPage,
+  previewSnippet,
+  pruneKeys,
+  PREVIEW_MAX_AGE_S,
+  readCookies,
+  safeNext,
+  snippetIsPublic,
+  taskPrompt,
+  validKey,
+} from "./preview.mjs";
 
-export const AGENT_VERSION = 3;
+export const AGENT_VERSION = 4;
 
 const user = process.env.CHILLRIG_USER || "coder";
 const home = process.env.CHILLRIG_HOME || `/home/${user}`;
 const port = Number(process.env.CHILLRIG_AGENT_PORT) || 7682;
+// Overridable so tests can run the agent without root: /etc/chillrig and /var/lib/chillrig.
+const configDir = process.env.CHILLRIG_CONFIG_DIR || "/etc/chillrig";
+const stateDir = process.env.CHILLRIG_STATE_DIR || "/var/lib/chillrig";
+const CADDYFILE = "/etc/caddy/Caddyfile";
+const PREVIEW_IMPORT = "import /etc/chillrig/preview.caddy";
 const controlPlane = (process.env.CHILLRIG_CONTROL_PLANE || "").replace(/\/$/, "");
 const allowedOrigins = new Set(
   [controlPlane, ...(process.env.CHILLRIG_ALLOWED_ORIGINS || "").split(",")]
@@ -569,7 +605,10 @@ async function listSessions() {
   return Promise.all(
     rows.map(async (row, index) => {
       const pane = index < 12 ? await capture(row.name, 80) : null;
-      return { ...row, state: sessionState(row.running, pane ?? ""), lastLines: pane ? lastLines(pane) : [] };
+      const state = sessionState(row.running, pane ?? "");
+      if (pane !== null || !row.running) noteTaskState(row, state);
+      // The card shows the tool's last message; the raw pane stays in the terminal.
+      return { ...row, state, summary: pane ? lastMessage(pane) : null, lastLines: pane ? lastLines(pane) : [] };
     }),
   );
 }
@@ -592,7 +631,10 @@ async function startSession(body) {
   if ((await tmux(["has-session", "-t", `=${name}`])).code === 0) return { error: "Try again in a second", status: 409 };
   const cwd = `${projectsDir}/${project}`;
   const autoApprove = body.autoApprove === true;
-  const prepared = await asUser(process.execPath, ["-e", PREPARE_TASK, "--", JSON.stringify({ name, tool, cwd, prompt, autoApprove })], {
+  // Tell the tool where the preview lives, so it keeps the dev server on the right port.
+  const appPortNow = appPort();
+  const full = taskPrompt(prompt, { port: appPortNow, host: boxHost(), label: previewPlan(project, appPortNow)?.label });
+  const prepared = await asUser(process.execPath, ["-e", PREPARE_TASK, "--", JSON.stringify({ name, tool, cwd, prompt: full, autoApprove })], {
     timeoutMs: 10000,
   });
   if (prepared.code !== 0) return { error: "Could not start the task", status: 500 };
@@ -600,6 +642,8 @@ async function startSession(body) {
   // Argument form: tmux runs task.sh directly, with no shell in between.
   const created = await tmux(["new-session", "-d", "-s", name, "-x", "200", "-y", "50", "-c", cwd, "--", "/bin/bash", taskScript, name, tool, ...toolArgs(tool, autoApprove)]);
   if (created.code !== 0) return { error: "Could not start the task", status: 500 };
+  // One preview at a time: free the port when the preview shows another project.
+  await stopPreviewUnless(project);
   const target = `=${name}:`;
   await tmux([
     "set-option", "-t", target, "@cr_tool", tool, ";",
@@ -624,6 +668,426 @@ async function stopSession(input) {
   return { ok: true };
 }
 
+// ---- live preview: one project's dev server behind Caddy's app route ----
+
+const previewStateFile = `${stateDir}/preview.json`;
+const keysFile = `${stateDir}/preview-keys.json`;
+const snippetFile = `${configDir}/preview.caddy`;
+const caddyOptions = { timeoutMs: 30000, env: { ...process.env, HOME: process.env.HOME || "/root" }, cwd: "/" };
+
+function readJsonFile(file, fallback) {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+/** Root-owned state, written atomically. Never into the user's home. */
+function saveFile(file, text, mode = 0o600) {
+  writeFileSync(`${file}.chillrig-new`, text, { mode });
+  chmodSync(`${file}.chillrig-new`, mode);
+  renameSync(`${file}.chillrig-new`, file);
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+
+let previewProject = validProject(readJsonFile(previewStateFile, {})?.project);
+let previewProblem = null; // { project, message } when the last start had nothing to run
+let previewQueue = Promise.resolve();
+
+/** Preview changes run one at a time: starting, stopping, port and Caddy changes. */
+function queuePreview(task) {
+  const run = previewQueue.then(task);
+  previewQueue = run.catch(() => undefined);
+  return run;
+}
+
+function rememberPreview(project) {
+  previewProject = project;
+  try {
+    saveFile(previewStateFile, JSON.stringify({ project }));
+  } catch {
+    // Kept in memory; the next start writes it again.
+  }
+}
+
+/** The port Caddy sends the app route to (/etc/chillrig/app_port, default 3000). */
+function appPort() {
+  try {
+    const value = Number(readFileSync(`${configDir}/app_port`, "utf8").trim());
+    return isPort(value) ? value : 3000;
+  } catch {
+    return 3000;
+  }
+}
+
+/** The box's public name from the active Caddy template, or null while it serves :80 only. */
+function boxHost() {
+  try {
+    const template = readFileSync(`${configDir}/Caddyfile.tmpl`, "utf8");
+    return template.match(/^([a-z0-9][a-z0-9.-]*\.[a-z]{2,}) \{$/im)?.[1]?.toLowerCase() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function portOpen(target) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port: target });
+    const done = (open) => {
+      socket.destroy();
+      resolve(open);
+    };
+    socket.setTimeout(700, () => done(false));
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+  });
+}
+
+/** The project folder the server listening on a port runs in, or null. */
+async function portOwner(target) {
+  const result = await exec("ss", ["-Hltnp", `sport = :${target}`], { timeoutMs: 5000, env: process.env, cwd: "/" });
+  for (const match of result.stdout.matchAll(/pid=(\d+)/g)) {
+    try {
+      const cwd = readlinkSync(`/proc/${match[1]}/cwd`);
+      if (cwd.startsWith(`${projectsDir}/`)) return cwd.slice(projectsDir.length + 1).split("/")[0];
+    } catch {
+      // Gone already.
+    }
+  }
+  return null;
+}
+
+function readPackage(dir) {
+  try {
+    const stat = lstatSync(`${dir}/package.json`);
+    if (!stat.isFile() || stat.size > 1_000_000) return null;
+    return JSON.parse(readFileSync(`${dir}/package.json`, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** How this project's dev server starts on a port, or null when we don't know. */
+function previewPlan(project, target) {
+  const dir = `${projectsDir}/${project}`;
+  let files;
+  try {
+    files = readdirSync(dir);
+  } catch {
+    return null;
+  }
+  return previewCommand({ pkg: readPackage(dir), files, port: target, host: boxHost() });
+}
+
+async function previewSessionInfo() {
+  // tmux 3.6 answers a missing target with empty fields and exit 0, so check the name too.
+  const format = "#{session_name}\t#{@cr_project}\t#{@cr_exit}\t#{pane_dead}";
+  const result = await tmux(["display-message", "-p", "-t", `=${PREVIEW_SESSION}:`, format]);
+  const [name = "", project = "", exit = "", dead = ""] = result.stdout.replace(/\n$/, "").split("\t");
+  if (result.code !== 0 || name !== PREVIEW_SESSION) return null;
+  return { project: validProject(project), stopped: dead === "1" || /^-?\d+$/.test(exit) };
+}
+
+// Runs in the preview session as the user. The dev command comes as argv, never as a
+// string. Installs packages first when node_modules is missing. When the server stops,
+// the exit code is saved on the session and a shell stays open with the output above.
+const PREVIEW_SCRIPT = `if [ "$1" = 1 ]; then
+  shift
+  echo "Installing packages..."
+  npm install --no-audit --no-fund || { tmux set-option -q @cr_exit 1; exec bash -l; }
+else
+  shift
+fi
+"$@"
+code=$?
+tmux set-option -q @cr_exit "$code" 2>/dev/null
+printf '\\n\\033[2mThe preview stopped. You are in %s.\\033[0m\\n' "$PWD"
+exec bash -l`;
+
+async function stopPreviewSession() {
+  if ((await tmux(["kill-session", "-t", `=${PREVIEW_SESSION}`])).code !== 0) return;
+  // Give the old server a moment to let go of the port.
+  const target = appPort();
+  for (let i = 0; i < 15 && (await portOpen(target)); i += 1) await sleep(200);
+}
+
+async function freeAppPort(taken) {
+  for (let candidate = 3000; candidate < 3020; candidate += 1) {
+    if (candidate !== taken && !(await portOpen(candidate))) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Starts the project's dev server, or keeps it when it already runs.
+ * auto: started by the box after a task, not by a click. A project with nothing to run
+ * then leaves the current preview alone.
+ */
+function startPreview(project, { auto = false } = {}) {
+  return queuePreview(() => runPreview(project, { auto }));
+}
+
+async function runPreview(project, { auto = false } = {}) {
+  if (!validProject(project) || !isProjectDir(project)) return { error: "Pick a project first", status: 400 };
+  let target = appPort();
+  const current = await previewSessionInfo();
+  if (current && current.project === project && !current.stopped) {
+    previewProblem = null;
+    rememberPreview(project);
+    return { ok: true };
+  }
+  if (!previewPlan(project, target)) {
+    if (auto) return { ok: true, skipped: true };
+    // Nothing to run. Stop the other project's preview so the link never shows the wrong app.
+    if (current) await stopPreviewSession();
+    previewProblem = { project, message: NO_COMMAND };
+    rememberPreview(project);
+    return { error: NO_COMMAND, status: 409 };
+  }
+  if (current) await stopPreviewSession();
+  if (await portOpen(target)) {
+    // Claude may already run this project's server (the task prompt asks it to). Another
+    // project's server keeps running; the preview moves to a free port instead.
+    if ((await portOwner(target)) === project) {
+      previewProblem = null;
+      rememberPreview(project);
+      return { ok: true };
+    }
+    const free = await freeAppPort(target);
+    if (!free) return { error: "Every preview port is busy. Stop a dev server in the terminal first.", status: 409 };
+    await applyAppPort(free);
+    target = free;
+  }
+  const plan = previewPlan(project, target);
+  if (!plan) return { error: NO_COMMAND, status: 409 };
+  await ensureTmuxServer();
+  const env = Object.entries(plan.env).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
+  const created = await tmux([
+    "new-session", "-d", "-s", PREVIEW_SESSION, "-x", "200", "-y", "50", "-c", `${projectsDir}/${project}`, ...env,
+    "--", "/bin/bash", "-c", PREVIEW_SCRIPT, PREVIEW_SESSION, plan.install ? "1" : "0", ...plan.command,
+  ]);
+  if (created.code !== 0) return { error: "Could not start the preview", status: 500 };
+  await tmux(["set-option", "-t", `=${PREVIEW_SESSION}:`, "@cr_project", project]);
+  previewProblem = null;
+  rememberPreview(project);
+  return { ok: true };
+}
+
+/** The saved project's preview, or the newest project's when there is none yet. */
+function ensurePreview() {
+  const project = previewProject && isProjectDir(previewProject) ? previewProject : listProjects()[0]?.name;
+  return project ? startPreview(project) : Promise.resolve(null);
+}
+
+/** One preview at a time: a task in another project gets the port. */
+function stopPreviewUnless(project) {
+  return queuePreview(async () => {
+    const current = await previewSessionInfo();
+    if (current && current.project !== project) await stopPreviewSession();
+  }).catch(() => undefined);
+}
+
+// After a reboot the preview session is gone. The waiting page brings it back, at most
+// twice a minute. A preview that stopped by itself stays stopped, with its output.
+let lastAutoStart = 0;
+async function autoStartPreview() {
+  if (!previewProject || Date.now() - lastAutoStart < 30000) return;
+  lastAutoStart = Date.now();
+  if (await previewSessionInfo()) return;
+  if (isProjectDir(previewProject) && !(await portOpen(appPort()))) await startPreview(previewProject);
+}
+
+function previewIsPublic() {
+  try {
+    return snippetIsPublic(readFileSync(snippetFile, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+/** Boxes from before agent v4 proxy the app with no check until update.sh migrates Caddy. */
+function previewProtectable() {
+  try {
+    return readFileSync(`${configDir}/Caddyfile.tmpl`, "utf8").includes(PREVIEW_IMPORT);
+  } catch {
+    return false;
+  }
+}
+
+async function previewStatus() {
+  const target = appPort();
+  const [session, open] = await Promise.all([previewSessionInfo(), portOpen(target)]);
+  const project = previewProject;
+  let state = "none";
+  if (previewProblem && previewProblem.project === project) state = "error";
+  else if (open) state = "running";
+  else if (session && !session.stopped) state = "starting";
+  else if (project) state = "stopped";
+  const protectable = previewProtectable();
+  // output: the preview session exists, so its terminal shows what happened.
+  const view = { project, port: target, state, public: !protectable || previewIsPublic(), protected: protectable, output: Boolean(session) };
+  if (state === "error") view.message = previewProblem.message;
+  return view;
+}
+
+// ---- preview cookie: random keys, only their hashes on disk ----
+
+let previewKeys = pruneKeys(readJsonFile(keysFile, []));
+
+function issuePreviewKey() {
+  const key = randomBytes(32).toString("base64url");
+  previewKeys = pruneKeys([...previewKeys, { hash: sha256(key), exp: Date.now() + PREVIEW_MAX_AGE_S * 1000 }]);
+  try {
+    saveFile(keysFile, JSON.stringify(previewKeys));
+  } catch {
+    // Still valid until the agent restarts.
+  }
+  return key;
+}
+
+function previewKeyValid(cookieHeader) {
+  const now = Date.now();
+  return readCookies(cookieHeader, PREVIEW_COOKIE).some((value) => {
+    if (!validKey(value)) return false;
+    const hash = sha256(value);
+    return previewKeys.some((key) => key.exp > now && key.hash === hash);
+  });
+}
+
+// Caddy's forward_auth for every app request when the preview is private. On localhost
+// only: no control-plane call after the first visit.
+function previewCheck(req, res) {
+  if (previewKeyValid(req.headers.cookie)) {
+    res.writeHead(200, { "cache-control": "no-store" });
+    return res.end();
+  }
+  const mode = req.headers["sec-fetch-mode"];
+  const page = mode ? mode === "navigate" : String(req.headers.accept || "").includes("text/html");
+  const method = String(req.headers["x-forwarded-method"] || "GET");
+  if (page && (method === "GET" || method === "HEAD")) {
+    // Managed boxes: the control plane checks the owner's session and sends them back with
+    // a ticket. Self-hosted: /_chillrig is behind basic auth, so enter there directly.
+    const next = encodeURIComponent(safeNext(String(req.headers["x-forwarded-uri"] || "/")));
+    const location = controlPlane ? `${controlPlane}/api/boxes/preview?next=${next}` : `/_chillrig/preview/enter?next=${next}`;
+    res.writeHead(302, { location, "cache-control": "no-store", "referrer-policy": "no-referrer" });
+    return res.end();
+  }
+  res.writeHead(401, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+  return res.end("This preview is private.\n");
+}
+
+// Reached through /_chillrig/*, so Caddy has already checked the ticket (or basic auth).
+async function previewEnter(req, res, url) {
+  const requested = url.searchParams.get("project");
+  const name = requested === null ? null : validProject(requested);
+  const starting = name && isProjectDir(name) ? startPreview(name) : requested === null ? ensurePreview() : Promise.resolve(null);
+  // Wait a little, so switching projects never lands on the old app; never for long.
+  await Promise.race([starting.catch(() => null), sleep(8000)]);
+  res.writeHead(303, {
+    location: safeNext(url.searchParams.get("next") ?? "/"),
+    "set-cookie": previewCookie(issuePreviewKey(), { frame: req.headers["sec-fetch-dest"] === "iframe" }),
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+  });
+  res.end();
+}
+
+// Caddy shows this (handle_errors) while nothing answers on the app port.
+async function previewWaiting(res) {
+  await autoStartPreview().catch(() => null);
+  const status = await previewStatus();
+  const page =
+    status.state === "error"
+      ? { title: "No preview yet", message: status.message, refresh: 0 }
+      : status.state === "stopped"
+        ? { title: "The preview stopped", message: "Open the terminal from your Chillrig dashboard to see why, or ask Claude to fix it.", refresh: 10 }
+        : status.state === "none"
+          ? { title: "Nothing to preview yet", message: "Start a task from your Chillrig dashboard. Your app shows up here.", refresh: 10 }
+          : { title: "Starting your preview", message: "This takes a few seconds. The page reloads by itself.", refresh: 2 };
+  res.writeHead(503, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "retry-after": "2" });
+  res.end(previewPage(page));
+}
+
+/** Validates a Caddyfile, swaps it in and reloads. On any failure the old files come back. */
+async function reloadCaddy(content, restore = () => {}) {
+  const next = `${CADDYFILE}.chillrig-next`;
+  writeFileSync(next, content, { mode: 0o644 });
+  const valid = await exec("caddy", ["validate", "--config", next, "--adapter", "caddyfile"], caddyOptions);
+  if (valid.code !== 0) {
+    rmSync(next, { force: true });
+    restore();
+    throw new Error("invalid Caddyfile");
+  }
+  const previous = readFileSync(CADDYFILE, "utf8");
+  renameSync(next, CADDYFILE);
+  const reloaded = await exec("caddy", ["reload", "--config", CADDYFILE, "--adapter", "caddyfile"], caddyOptions);
+  if (reloaded.code !== 0) {
+    writeFileSync(CADDYFILE, previous);
+    restore();
+    await exec("caddy", ["reload", "--config", CADDYFILE, "--adapter", "caddyfile"], caddyOptions);
+    throw new Error("caddy reload failed");
+  }
+}
+
+function ensureSnippet() {
+  if (!existsSync(snippetFile)) saveFile(snippetFile, previewSnippet(false), 0o644);
+}
+
+async function applyAppPort(appPort) {
+  ensureSnippet();
+  const template = readFileSync(`${configDir}/Caddyfile.tmpl`, "utf8");
+  await reloadCaddy(template.replaceAll("__APP_PORT__", String(appPort)));
+  writeFileSync(`${configDir}/app_port`, String(appPort));
+}
+
+async function setPreviewPublic(value) {
+  if (typeof value !== "boolean") return { error: "Choose public or private", status: 400 };
+  if (!previewProtectable()) return { error: "Update your box first", status: 409 };
+  ensureSnippet();
+  const before = readFileSync(snippetFile, "utf8");
+  saveFile(snippetFile, previewSnippet(value), 0o644);
+  try {
+    await reloadCaddy(readFileSync(CADDYFILE, "utf8"), () => saveFile(snippetFile, before, 0o644));
+  } catch {
+    return { error: "Could not change that. Try again.", status: 500 };
+  }
+  return { ok: true, preview: await previewStatus() };
+}
+
+// ---- the box starts the preview itself when a task stops working ----
+
+const taskStates = new Map(); // session name -> last state seen
+
+function noteTaskState(row, state) {
+  const before = taskStates.get(row.name);
+  taskStates.set(row.name, state);
+  // Finished, or waiting for the user: start that project's preview. It never depends on
+  // the tool remembering to.
+  if (before === "working" && state !== "working" && row.project) startPreview(row.project, { auto: true }).catch(() => null);
+}
+
+let watching = false;
+async function watchTasks() {
+  if (watching) return;
+  watching = true;
+  try {
+    const rows = (await listSessionRows()).slice(0, 12);
+    const names = new Set(rows.map((row) => row.name));
+    for (const name of taskStates.keys()) if (!names.has(name)) taskStates.delete(name);
+    for (const row of rows) {
+      const pane = row.running ? await capture(row.name, 40) : "";
+      if (pane !== null) noteTaskState(row, sessionState(row.running, pane));
+    }
+  } catch {
+    // Try again on the next tick.
+  } finally {
+    watching = false;
+  }
+}
+
 // ---- clone + port (used by the control plane) ----
 
 function isPort(value) {
@@ -643,6 +1107,10 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const route = url.pathname.replace(/^\/_chillrig/, "") || "/";
+    // Caddy's own calls for the app preview. They carry the visitor's headers (an app can
+    // send any Origin), so they come before the Origin check.
+    if (route === "/preview/check") return previewCheck(req, res);
+    if (route === "/preview/waiting") return await previewWaiting(res);
     const requestOrigin = req.headers.origin;
     if (requestOrigin) {
       // Browsers call from the control plane only. Server-to-server calls send no Origin.
@@ -708,7 +1176,18 @@ const server = http.createServer(async (req, res) => {
       return reply(res, await cloneProject(await readJson(req)), origin);
     }
     if (req.method === "GET" && route === "/sessions") {
-      return send(res, 200, { sessions: await listSessions() }, origin);
+      const [sessions, preview] = await Promise.all([listSessions(), previewStatus()]);
+      return send(res, 200, { sessions, preview }, origin);
+    }
+    if (req.method === "GET" && route === "/preview/enter") {
+      return await previewEnter(req, res, url);
+    }
+    if (req.method === "GET" && route === "/preview") {
+      return send(res, 200, await previewStatus(), origin);
+    }
+    if (req.method === "POST" && route === "/preview/public") {
+      const body = await readJson(req);
+      return reply(res, await queuePreview(() => setPreviewPublic(body.public)), origin);
     }
     if (req.method === "POST" && route === "/sessions") {
       return reply(res, await startSession(await readJson(req, 16000)), origin);
@@ -731,10 +1210,15 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       const appPort = Number(body.port);
       if (!isPort(appPort)) return send(res, 400, { error: "Invalid port" }, origin);
-      const template = readFileSync("/etc/chillrig/Caddyfile.tmpl", "utf8");
-      writeFileSync("/etc/caddy/Caddyfile", template.replaceAll("__APP_PORT__", String(appPort)));
-      writeFileSync("/etc/chillrig/app_port", String(appPort));
-      await run("caddy", ["reload", "--config", "/etc/caddy/Caddyfile"], { timeoutMs: 20000, env: process.env, cwd: "/" });
+      await queuePreview(async () => {
+        await applyAppPort(appPort);
+        // A running preview moves to the new port with Caddy.
+        const current = await previewSessionInfo();
+        if (current?.project && !current.stopped) {
+          await tmux(["kill-session", "-t", `=${PREVIEW_SESSION}`]);
+          await runPreview(current.project);
+        }
+      });
       return send(res, 200, { ok: true, port: appPort }, origin);
     }
     return send(res, 404, { error: "Not found" }, origin);
@@ -744,3 +1228,4 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, "127.0.0.1");
+setInterval(() => void watchTasks(), 10000);

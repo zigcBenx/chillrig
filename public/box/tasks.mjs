@@ -194,6 +194,81 @@ export function lastLines(text, count = 8, width = 160) {
   return lines.slice(-count).map((line) => (line.length > width ? `${line.slice(0, width - 1)}…` : line));
 }
 
+// ---- the tool's last message, for the task card ----
+
+// Each transcript item starts with a bullet: Claude Code ● (⏺ on macOS), Codex •.
+const ITEM = /^([●⏺•])\s+(.*)$/;
+// Claude tool calls: Write(app/page.tsx), Bash(npm run build), Web Search(...), MCP tools.
+const CLAUDE_TOOL = /^[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*){0,2}\(|\(MCP\)/;
+// Collapsed tool groups, progress and Codex tool items. Their output lines start with
+// ⎿ (Claude) or └ (Codex); Codex file edits end with "(+added -removed)".
+const TOOL_ITEM = [
+  /\(ctrl\+\w+ to (?:expand|see)/i,
+  /^(?:Update Todos|Read \d+ files?|Searched for \d+|Listed \d+|Interrupted by user)/i,
+  /^(?:Explored|Exploring|Updated Plan|Worked for|Working\b|Waited|Waiting for|Called|Calling)\b/,
+  /\(\+\d+ -\d+\)$/,
+  /esc to interrupt/i,
+];
+const TOOL_OUTPUT = /^\s*[⎿└]/;
+// Lines that are never prose, even inside a message.
+const NOT_PROSE = [
+  /files that changed while this command ran/i,
+  /^(?:[~.]?\/)?[\w.@-]+(?:\/[\w.@-]+)+\/?$/, // a bare path
+  /^\s*\d+\s*[+-]\s/, // a numbered diff line
+];
+
+function isToolItem(item) {
+  return CLAUDE_TOOL.test(item.head) || TOOL_ITEM.some((pattern) => pattern.test(item.head)) || item.body.some((line) => TOOL_OUTPUT.test(line));
+}
+
+/**
+ * The last thing Claude or Codex said, in plain words: the final prose item in the pane,
+ * without tool calls, diffs, changed-file notes, paths, chrome or key hints.
+ * Up to 3 short paragraphs and max characters, or null when there is none yet.
+ */
+export function lastMessage(text, max = 320) {
+  const items = [];
+  let item = null;
+  for (const raw of cleanPane(text).split("\n")) {
+    const line = raw.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "").trimEnd();
+    const start = line.match(ITEM);
+    if (start) {
+      item = { head: start[2].trim(), body: [] };
+      items.push(item);
+    } else if (!line.trim()) {
+      if (item) item.body.push("");
+    } else if (item && /^\s/.test(line) && !DECORATION.test(line) && !CHROME.some((pattern) => pattern.test(line))) {
+      // Messages wrap with an indent; anything back at column 0 (a prompt, a rule, the
+      // input box) ends the item.
+      item.body.push(line);
+    } else {
+      item = null;
+    }
+  }
+  const message = items.reverse().find((entry) => entry.head && !isToolItem(entry));
+  if (!message) return null;
+
+  const paragraphs = [];
+  let current = "";
+  for (const line of [message.head, ...message.body.map((value) => value.trim())]) {
+    const clean = line.replace(/\*\*|`/g, "");
+    if (!clean || /^(?:[-*•]|\d+\.)\s/.test(clean)) {
+      if (current) paragraphs.push(current);
+      current = clean;
+      continue;
+    }
+    if (NOT_PROSE.some((pattern) => pattern.test(clean))) continue;
+    current = current ? `${current} ${clean}` : clean;
+  }
+  if (current) paragraphs.push(current);
+  const kept = paragraphs.filter(Boolean).slice(0, 3).join("\n");
+  if (!kept) return null;
+  if (kept.length <= max) return kept;
+  const cut = kept.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, "")}…`;
+}
+
 /**
  * working: the tool is busy (both CLIs show "esc to interrupt" while they work).
  * waiting: the tool is open and waiting for the user. finished: it exited.

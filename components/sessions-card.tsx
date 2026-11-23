@@ -1,10 +1,19 @@
 "use client";
 
+import { PreviewAccess, previewStateLabel } from "@/components/preview-access";
 import { useBoxUpdate } from "@/components/start-steps";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { BoxError, TASKS_AGENT_VERSION, type BoxClient, type BoxStatus, type Session } from "@/lib/box-client";
-import { Loader2, Plus } from "lucide-react";
+import {
+  BoxError,
+  previewHref,
+  TASKS_AGENT_VERSION,
+  type BoxClient,
+  type BoxStatus,
+  type PreviewStatus,
+  type Session,
+} from "@/lib/box-client";
+import { ExternalLink, Loader2, Plus } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -14,6 +23,7 @@ const POLL_MS = 10_000;
 /** Tasks running on the box. Polls the box directly, only while this tab is visible. */
 export function SessionsCard({ client, status, onStatus }: { client: BoxClient; status: BoxStatus; onStatus: (status: BoxStatus) => void }) {
   const [sessions, setSessions] = useState<Session[] | null>(null);
+  const [preview, setPreview] = useState<PreviewStatus | null>(null);
   const [stopping, setStopping] = useState<Session | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +40,8 @@ export function SessionsCard({ client, status, onStatus }: { client: BoxClient; 
       try {
         const next = await client.sessions();
         if (stop) return;
-        setSessions(next);
+        setSessions(next.sessions);
+        setPreview(next.preview);
         setNow(Date.now());
         setError(null);
       } catch {
@@ -101,15 +112,19 @@ export function SessionsCard({ client, status, onStatus }: { client: BoxClient; 
                 </span>
               </div>
               {session.title ? <p className="muted mt-1.5 line-clamp-2 text-sm">{session.title}</p> : null}
-              {session.lastLines.length > 0 ? (
-                <pre className="mt-3 max-h-44 overflow-hidden whitespace-pre-wrap break-words rounded-2xl bg-[#0c0c0e] p-3 font-mono text-[11.5px] leading-relaxed text-[#d9d9de]">
-                  {session.lastLines.join("\n")}
-                </pre>
-              ) : null}
+              {/* The tool's last message. The raw output stays behind Open (the terminal). */}
+              {session.summary ? <p className="mt-3 line-clamp-3 whitespace-pre-line text-sm leading-relaxed">{session.summary}</p> : null}
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Button asChild size="sm">
                   <Link href={`/terminal?session=${encodeURIComponent(session.name)}`}>Open</Link>
                 </Button>
+                {session.project ? (
+                  <Button asChild size="sm" variant="ghost">
+                    <a href={previewHref(session.project)} target="_blank" rel="noopener">
+                      Open preview <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                    </a>
+                  </Button>
+                ) : null}
                 {session.project ? (
                   <Button asChild size="sm" variant="ghost">
                     <Link href={`/start?step=task&project=${encodeURIComponent(session.project)}`}>New task</Link>
@@ -124,6 +139,30 @@ export function SessionsCard({ client, status, onStatus }: { client: BoxClient; 
         </ul>
       ) : null}
       {error ? <p className="muted mt-3 text-sm">{error}</p> : null}
+
+      {preview && preview.state !== "none" ? (
+        <div className="mt-4 flex flex-wrap items-start justify-between gap-3 border-t border-[var(--chip-border)] pt-4">
+          <div className="min-w-0 text-sm">
+            <Link href="/preview" className="font-medium hover:underline">
+              Preview
+            </Link>
+            <span className="muted">
+              {" "}
+              · {preview.project ?? "no project"} · {previewStateLabel(preview)}
+            </span>
+            {preview.state === "error" && preview.message ? <p className="muted mt-1 text-xs">{preview.message}</p> : null}
+            {preview.state === "stopped" && preview.output ? (
+              <p className="muted mt-1 text-xs">
+                It stopped.{" "}
+                <Link href="/terminal?session=chillrig-preview" className="underline underline-offset-2">
+                  See why
+                </Link>
+              </p>
+            ) : null}
+          </div>
+          <PreviewAccess client={client} preview={preview} onChange={setPreview} />
+        </div>
+      ) : null}
 
       <Dialog open={stopping !== null} onOpenChange={(open) => (open ? undefined : setStopping(null))}>
         <DialogContent
@@ -172,7 +211,7 @@ function UpdateCard({ client, onStatus }: { client: BoxClient; onStatus: (status
             ? "Updating. About a minute. Your files and sessions stay."
             : update.phase === "slow"
               ? "Still updating. Check back in a few minutes."
-              : (update.error ?? "Get projects and tasks you can follow from here.")}
+              : (update.error ?? "Get a live preview of your app and clearer task updates.")}
         </span>
       </span>
       <Button size="sm" disabled={busy} onClick={() => void update.start()}>
