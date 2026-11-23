@@ -47,3 +47,25 @@ export async function displayPrice() {
   priceCache = { at: Date.now(), label };
   return label;
 }
+
+let founderCache: { at: number; value: { code: string; left: number } | null } | null = null;
+
+/** Founder promo code and how many redemptions are left, or null when none apply. */
+export async function founderOffer() {
+  if (founderCache && Date.now() - founderCache.at < 5 * 60 * 1000) return founderCache.value;
+  const code = (process.env.CHILLRIG_FOUNDER_CODE || "FOUNDER10").trim();
+  let value: { code: string; left: number } | null = null;
+  try {
+    const listed = await getStripe().promotionCodes.list({ code, active: true, limit: 1 });
+    const promo = listed.data[0];
+    if (promo) {
+      const max = promo.max_redemptions ?? null;
+      const left = max === null ? 10 : Math.max(0, max - promo.times_redeemed);
+      value = left > 0 ? { code, left } : null;
+    }
+  } catch {
+    value = null;
+  }
+  founderCache = { at: Date.now(), value };
+  return value;
+}

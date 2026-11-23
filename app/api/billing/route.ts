@@ -1,7 +1,7 @@
 import { json, route } from "@/lib/http";
 import { isMockMode } from "@/lib/mode";
 import { requireUser } from "@/lib/session";
-import { displayPrice } from "@/lib/stripe-client";
+import { displayPrice, founderOffer } from "@/lib/stripe-client";
 import { store } from "@/lib/store";
 
 export const GET = route(async () => {
@@ -12,7 +12,8 @@ export const GET = route(async () => {
     mock: isMockMode(),
     amount,
     interval: "month",
-    note: "VAT included",
+    note: "VAT included · cancel anytime",
+    founder: isMockMode() ? { code: "FOUNDER10", left: 10 } : await founderOffer(),
     subscription: subscription?.status ?? null,
   });
 });

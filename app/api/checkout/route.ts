@@ -36,6 +36,12 @@ export const POST = route(async (request) => {
     customerId = customer.id;
     await store().setStripeCustomer(user.id, customerId);
   }
+  // Paid already but the webhook has not landed yet: provision instead of charging twice.
+  const paid = await stripe.subscriptions.list({ customer: customerId, status: "active", limit: 1 });
+  if (paid.data[0]) {
+    await activateAndProvision(user.id, { customerId, subscriptionId: paid.data[0].id });
+    return json({ url: `${origin}/setup` });
+  }
   const price = process.env.STRIPE_PRICE_ID;
   if (!price) throw new HttpError(500, "Stripe price is not configured");
   const session = await stripe.checkout.sessions.create({
@@ -50,6 +56,13 @@ export const POST = route(async (request) => {
     // Business buyers can add a VAT ID. The billing address is needed for VAT either way.
     billing_address_collection: "required",
     tax_id_collection: { enabled: true },
+    // Founder code (FOUNDER10) and any later promo codes.
+    allow_promotion_codes: true,
+    custom_text: {
+      submit: {
+        message: `By subscribing you agree to the Terms (${origin}/terms) and Privacy Policy (${origin}/privacy). Cancel anytime; full refund within 7 days (${origin}/refund).`,
+      },
+    },
     customer_update: { address: "auto", name: "auto" },
     // Stripe Tax computes VAT once it is active on the account (prices are tax-inclusive).
     ...(automaticTaxEnabled() ? { automatic_tax: { enabled: true } } : {}),

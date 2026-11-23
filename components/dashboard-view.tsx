@@ -112,10 +112,41 @@ export function DashboardView() {
           </button>
         </div>
         {data.subscription?.status === "past_due" ? (
-          <p className="mt-3 text-sm danger">Payment failed</p>
+          <p className="mt-3 text-sm danger">
+            Your last payment failed. Your box stays on while we retry.{" "}
+            <button type="button" className="underline underline-offset-2" onClick={() => void cancel()}>
+              Update your card
+            </button>
+          </p>
         ) : null}
         {box.error ? <p className="mt-3 text-sm danger">{box.error}</p> : null}
       </section>
+
+      {running ? (
+        <section className="glass mt-3 p-6 sm:p-8">
+          <h2 className="text-lg font-semibold tracking-tight">Start here</h2>
+          <ol className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+            <li className="rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-4 py-3">
+              <span className="font-medium">1. Connect your AI</span>
+              <span className="muted mt-1 block">
+                Tap Claude or ChatGPT below and sign in with your own plan. One time only.
+              </span>
+            </li>
+            <li className="rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-4 py-3">
+              <span className="font-medium">2. Bring your project</span>
+              <span className="muted mt-1 block">
+                Tap GitHub to copy in a public repo, or just ask Claude to start a new app in the Terminal.
+              </span>
+            </li>
+            <li className="rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-4 py-3">
+              <span className="font-medium">3. Close your laptop</span>
+              <span className="muted mt-1 block">
+                Your box keeps working. Come back from any browser or your phone. App shows what you are building.
+              </span>
+            </li>
+          </ol>
+        </section>
+      ) : null}
 
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
         {actions.map((action) => (
@@ -138,11 +169,11 @@ export function DashboardView() {
         </button>
         <button type="button" className="glass action-card opacity-80" onClick={() => void cancel()}>
           <span className="icon-blob">
-            <span className="text-lg leading-none">×</span>
+            <span className="text-lg leading-none">€</span>
           </span>
           <span>
-            <span className="block font-medium tracking-tight">Cancel</span>
-            <span className="muted text-sm">Plan</span>
+            <span className="block font-medium tracking-tight">Billing</span>
+            <span className="muted text-sm">Card, invoices, cancel</span>
           </span>
         </button>
       </div>

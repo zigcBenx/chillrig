@@ -36,10 +36,14 @@ export async function POST(request: Request) {
 
 async function handleEvent(event: Stripe.Event) {
   switch (event.type) {
-    case "checkout.session.completed": {
+    case "checkout.session.completed":
+    case "checkout.session.async_payment_succeeded": {
       const session = event.data.object as Stripe.Checkout.Session;
       const userId = session.metadata?.user_id || session.client_reference_id;
       if (!userId || session.mode !== "subscription" || session.status !== "complete") return;
+      // A delayed method (e.g. SEPA debit) completes the session before the money arrives.
+      // No machine until it is paid; async_payment_succeeded comes back for those.
+      if (!checkoutPaid(session)) return;
       await activateAndProvision(userId, {
         customerId: stripeId(session.customer),
         subscriptionId: stripeId(session.subscription),
@@ -96,4 +100,8 @@ function invoiceSubscriptionId(invoice: Stripe.Invoice) {
   if (typeof nested === "string") return nested;
   if (nested && typeof nested === "object") return nested.id;
   return null;
+}
+
+function checkoutPaid(session: Pick<Stripe.Checkout.Session, "payment_status">) {
+  return session.payment_status === "paid" || session.payment_status === "no_payment_required";
 }

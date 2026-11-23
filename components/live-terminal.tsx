@@ -74,6 +74,19 @@ export function LiveTerminal({
       if (stopped) return;
       if (!response.ok) {
         onStatus?.("closed");
+        // Never leave a blank black screen: say why and where to go.
+        if (response.status === 404) {
+          term.writeln("You don't have a box yet.");
+          term.writeln("Go back to the dashboard and pick a plan to get one.");
+          window.setTimeout(() => {
+            if (!stopped) window.location.assign("/dashboard");
+          }, 2500);
+        } else if (response.status === 401) {
+          window.location.assign("/login");
+        } else {
+          term.writeln("Your box isn't reachable right now (still starting, or restarting).");
+          term.writeln("Press Reconnect in a minute, or check the dashboard.");
+        }
         return;
       }
       const ticket = (await response.json()) as { hostname: string; wsPath: string; ticket: string };

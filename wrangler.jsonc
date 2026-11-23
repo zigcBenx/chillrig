@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "chillrig",
-  "main": ".open-next/worker.js",
+  "main": "worker.ts",
   "compatibility_date": "2026-11-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "workers_dev": true,
@@ -17,6 +17,8 @@
     }
   ],
   "observability": { "enabled": true },
+  // Daily Hetzner reconciliation at 03:17 UTC (free on the Workers free plan; see worker.ts).
+  "triggers": { "crons": ["17 3 * * *"] },
   // Non-secret config. Secrets go in with `wrangler secret bulk`, never here.
   "vars": {
     "CHILLRIG_MOCK": "false",

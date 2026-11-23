@@ -76,6 +76,38 @@ export async function getServer(id: number): Promise<CreatedServer | null> {
   return readServer(data.server);
 }
 
+export type ListedServer = { id: number; name: string; created: string; labels: Record<string, string> };
+
+/** Every server on the project, all pages. */
+export async function listServers(): Promise<ListedServer[]> {
+  const servers: ListedServer[] = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const data = (await hetzner(`/servers?per_page=50&page=${page}`)) as {
+      servers?: Array<{ id: number; name: string; created: string; labels?: Record<string, string> }>;
+      meta?: { pagination?: { next_page?: number | null } };
+    };
+    for (const server of data.servers ?? []) {
+      servers.push({ id: server.id, name: server.name, created: server.created, labels: server.labels ?? {} });
+    }
+    if (!data.meta?.pagination?.next_page) break;
+  }
+  return servers;
+}
+
+export type ListedFirewall = { id: number; name: string; created: string; attached: number };
+
+export async function listFirewalls(): Promise<ListedFirewall[]> {
+  const data = (await hetzner("/firewalls?per_page=50")) as {
+    firewalls?: Array<{ id: number; name: string; created: string; applied_to?: unknown[] }>;
+  };
+  return (data.firewalls ?? []).map((firewall) => ({
+    id: firewall.id,
+    name: firewall.name,
+    created: firewall.created,
+    attached: firewall.applied_to?.length ?? 0,
+  }));
+}
+
 export async function enableBackup(id: number) {
   await hetzner(`/servers/${id}/actions/enable_backup`, { method: "POST", body: "{}" });
 }

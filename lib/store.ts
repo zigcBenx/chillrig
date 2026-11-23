@@ -14,6 +14,7 @@ export type Store = {
   upsertSubscription(subscription: Subscription): Promise<void>;
   getBoxByUser(userId: string): Promise<Box | null>;
   getBoxById(id: string): Promise<Box | null>;
+  getBoxBySlug(slug: string): Promise<Box | null>;
   listSlugs(): Promise<string[]>;
   insertBox(box: Box): Promise<void>;
   saveBox(box: Box): Promise<void>;
@@ -165,6 +166,9 @@ const mockStore: Store = {
   async getBoxById(id) {
     return withMock((state) => state.boxes.find((box) => box.id === id) ?? null);
   },
+  async getBoxBySlug(slug) {
+    return withMock((state) => state.boxes.find((box) => box.slug === slug) ?? null);
+  },
   async listSlugs() {
     return withMock((state) => state.boxes.map((box) => box.slug));
   },
@@ -292,6 +296,10 @@ const liveStore: Store = {
   },
   async getBoxById(id) {
     const { data } = await rest<BoxRow[]>(`boxes?id=eq.${encodeURIComponent(id)}&select=*`);
+    return data?.[0] ? mapBox(data[0]) : null;
+  },
+  async getBoxBySlug(slug) {
+    const { data } = await rest<BoxRow[]>(`boxes?slug=eq.${encodeURIComponent(slug)}&select=*`);
     return data?.[0] ? mapBox(data[0]) : null;
   },
   async listSlugs() {

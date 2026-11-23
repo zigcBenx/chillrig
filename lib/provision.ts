@@ -46,6 +46,11 @@ export async function activateAndProvision(
     const subscription = await stripe.subscriptions.retrieve(input.subscriptionId);
     currentPeriodEnd = periodEnd(subscription);
     input.customerId = input.customerId ?? stripeId(subscription.customer);
+    // Never create a machine for a subscription Stripe does not consider paid.
+    if (subscription.status !== "active" && subscription.status !== "trialing") {
+      console.warn(`Not provisioning: subscription ${subscription.id} is ${subscription.status}`);
+      return null;
+    }
   }
   const existing = await store().getSubscription(userId);
   const next: Subscription = {
@@ -170,6 +175,7 @@ async function continueLiveProvision(box: Box) {
     locations: process.env.HETZNER_LOCATIONS,
     preferredLocation: process.env.HETZNER_LOCATION,
     maxMonthlyEur: maxMonthlyEur(process.env.HETZNER_MAX_MONTHLY_EUR),
+    backups: backupsEnabled(),
   });
   // Firewall first (ports 80/443 + ICMP), then pass it to the create call so the box is
   // never reachable unfiltered and no post-create attach can race the network setup.
@@ -220,10 +226,15 @@ async function continueLiveProvision(box: Box) {
   box.serverType = placed.serverType;
   box.status = "provisioning";
   await store().saveBox(box);
-  try {
-    await enableBackup(created.id);
-    box.backupEnabled = true;
-  } catch {
+  // Hetzner backups add 20% to the server price, so they are opt-in (CHILLRIG_BACKUPS=1).
+  if (backupsEnabled()) {
+    try {
+      await enableBackup(created.id);
+      box.backupEnabled = true;
+    } catch {
+      box.backupEnabled = false;
+    }
+  } else {
     box.backupEnabled = false;
   }
   await store().saveBox(box);
@@ -494,6 +505,11 @@ export function sameIpv6Slash64(ip: string, network: string) {
   };
   const a = prefix(ip);
   return a !== null && a === prefix(network);
+}
+
+function backupsEnabled() {
+  const flag = process.env.CHILLRIG_BACKUPS?.trim().toLowerCase();
+  return flag === "1" || flag === "true" || flag === "yes";
 }
 
 async function runningBox(userId: string) {

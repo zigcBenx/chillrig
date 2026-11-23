@@ -51,3 +51,18 @@ export async function sendPaymentFailedEmail(profile: Profile) {
   });
   return response.ok;
 }
+
+/** Operator alert (reconciliation findings). Optional: needs Resend and CHILLRIG_ALERT_EMAIL. */
+export async function sendAlertEmail(subject: string, text: string) {
+  const key = process.env.RESEND_API_KEY;
+  const from = process.env.EMAIL_FROM;
+  const to = process.env.CHILLRIG_ALERT_EMAIL;
+  if (!key || !from || !to) return false;
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from, to: [to], subject, text }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  return response.ok;
+}

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { subscriptionAllowsBox, subscriptionEndsBox } from "../lib/billing-policy";
-import { fallbackNotice, isPricierThanPlan, placementPlan, PLAN_MONTHLY_EUR } from "../lib/hetzner-types";
+import { effectiveMonthlyEur, fallbackNotice, isPricierThanPlan, placementPlan, PLAN_MONTHLY_EUR } from "../lib/hetzner-types";
 import { renderUserData } from "../lib/cloud-init";
 import { boxHostname, sslipHostname } from "../lib/hostname";
 import { parseGitHubRepo } from "../lib/github";
@@ -148,6 +148,12 @@ describe("install script", () => {
       ["cx23", "cx23", "cx23"],
     );
     assert.equal(placementPlan({ preferredLocation: "hel1" })[0]?.location, "hel1");
+    // The cap covers the whole bill: IPv4 always, backups when on.
+    const withBackups = [...new Set(placementPlan({ maxMonthlyEur: 12, backups: true }).map((item) => item.serverType))];
+    assert.deepEqual(withBackups, ["cx33", "cx23"]);
+    assert.ok(placementPlan({ maxMonthlyEur: 12, backups: true }).every((item) => effectiveMonthlyEur(item.spec!, true) <= 12));
+    assert.equal(placementPlan({ types: "cax21", maxMonthlyEur: 11.4 }).length, 0);
+    assert.equal(effectiveMonthlyEur({ monthlyEur: 10.99 }, true), 10.99 * 1.2 + 0.5);
     assert.equal(isPricierThanPlan(8.99), false);
     assert.equal(isPricierThanPlan(10.99), true);
     assert.equal(isPricierThanPlan(5.99), false);

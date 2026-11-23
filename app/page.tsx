@@ -4,7 +4,8 @@ import type { CSSProperties, ReactNode } from "react";
 import { ArrowIcon, CheckIcon, CrossIcon, GitHubIcon } from "@/components/icons";
 import { LandingBackdrop } from "@/components/landing-backdrop";
 import { LogoMark, Mascot } from "@/components/logo";
-import { GITHUB_URL } from "@/lib/links";
+import { FounderOffer } from "@/components/founder-offer";
+import { COMPANY, GITHUB_URL, SUPPORT_EMAIL } from "@/lib/links";
 
 export const metadata: Metadata = {
   title: "Chillrig",
@@ -122,7 +123,7 @@ export default function HomePage() {
               Always on.
             </h1>
             <p className="lede rise max-w-[600px]" style={{ fontSize: "clamp(1.0625rem, 1.5vw, 1.375rem)" }}>
-              Chillrig puts your Claude and ChatGPT agents on a cloud machine of their own. Close the laptop. They keep working.
+              Your own cloud computer with Claude Code and Codex ready to go. No laptop needed, no setup. Close the lid, your agents keep working.
             </p>
             <div className="rise flex flex-col items-center gap-4">
               <div className="flex flex-wrap items-center justify-center gap-3.5">
@@ -134,7 +135,8 @@ export default function HomePage() {
                   See how it works
                 </a>
               </div>
-              <p className="muted text-[15px]">€29 / month · VAT included</p>
+              <p className="muted text-[15px]">€29 / month · VAT included · cancel anytime</p>
+              <FounderOffer />
             </div>
           </section>
 
@@ -209,7 +211,10 @@ export default function HomePage() {
           <Section>
             <div className="mb-12 flex flex-col items-center gap-4 text-center" data-reveal>
               <h2 className="title">Built for vibe coders, not sysadmins.</h2>
-              <p className="lede">No technical stuff. Just plug and play.</p>
+              <p className="lede max-w-[640px]">
+                No servers to rent, no SSH, no terminal setup. Pay, wait about 3 minutes, sign in to your own Claude or
+                ChatGPT plan, and build from any browser or your phone.
+              </p>
             </div>
             <div className="grid gap-5 md:grid-cols-3">
               <Feature
@@ -264,7 +269,16 @@ export default function HomePage() {
                   <br />
                   Close your laptop.
                 </h2>
-                <Ticks large items={["Claude and ChatGPT agents, always on", "Runs your dev server", "Connect from your phone"]} />
+                <Ticks
+                  large
+                  items={[
+                    "Claude Code and Codex, always on",
+                    "Runs your dev server, with a preview link",
+                    "Open it from any browser or your phone",
+                    "Uses your own Claude or ChatGPT plan",
+                    "Cancel anytime, full refund within 7 days",
+                  ]}
+                />
               </div>
               <div className="peek-host glass glass-strong flex min-w-0 max-w-[400px] flex-[1_1_300px] flex-col gap-6 p-8">
                 <Mascot size={112} className="mascot-peek" />
@@ -275,6 +289,7 @@ export default function HomePage() {
                   </p>
                   <p className="muted text-[15px]">VAT included</p>
                 </div>
+                <FounderOffer variant="card" />
                 <Link href="/go" className="btn btn-lg">
                   Get your box
                   <ArrowIcon />
@@ -293,7 +308,19 @@ export default function HomePage() {
             <a className="nav-link px-0 text-sm font-normal" href={GITHUB_URL} target="_blank" rel="noreferrer">
               GitHub
             </a>
-            <span>© 2026 Chillrig</span>
+            <Link className="nav-link px-0 text-sm font-normal" href="/terms">
+              Terms
+            </Link>
+            <Link className="nav-link px-0 text-sm font-normal" href="/privacy">
+              Privacy
+            </Link>
+            <Link className="nav-link px-0 text-sm font-normal" href="/refund">
+              Refunds
+            </Link>
+            <a className="nav-link px-0 text-sm font-normal" href={`mailto:${SUPPORT_EMAIL}`}>
+              Contact
+            </a>
+            <span>© 2026 {COMPANY.name}</span>
           </div>
         </footer>
       </div>

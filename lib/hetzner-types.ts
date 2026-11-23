@@ -21,6 +21,15 @@ export const SERVER_CATALOG: ServerTypeSpec[] = [
 export const DEFAULT_TYPE_CHAIN = ["cx33", "cax21", "cx23"];
 export const DEFAULT_LOCATIONS = ["fsn1", "nbg1", "hel1"];
 export const DEFAULT_MAX_MONTHLY_EUR = 12;
+/** Hetzner primary IPv4, billed per server on top of the server price. */
+export const IPV4_MONTHLY_EUR = 0.5;
+/** Hetzner backups cost 20% of the server price. */
+export const BACKUP_SHARE = 0.2;
+
+/** What one box really costs per month: server, its IPv4 and (if on) backups. */
+export function effectiveMonthlyEur(spec: Pick<ServerTypeSpec, "monthlyEur">, backups: boolean) {
+  return spec.monthlyEur * (backups ? 1 + BACKUP_SHARE : 1) + IPV4_MONTHLY_EUR;
+}
 
 export type Placement = {
   serverType: string;
@@ -40,14 +49,17 @@ export function placementPlan(options?: {
   locations?: string;
   preferredLocation?: string;
   maxMonthlyEur?: number;
+  backups?: boolean;
 }): Placement[] {
   const cap = options?.maxMonthlyEur ?? DEFAULT_MAX_MONTHLY_EUR;
+  const backups = options?.backups ?? false;
   const types = typeChain(options?.types, options?.singleType);
   const locations = locationChain(options?.preferredLocation, options?.locations);
   const plan: Placement[] = [];
   for (const serverType of types) {
     const spec = SERVER_CATALOG.find((item) => item.name === serverType) ?? null;
-    if (!spec || spec.monthlyEur > cap) continue;
+    // The cap is on the whole monthly bill for the box, not just the server price.
+    if (!spec || effectiveMonthlyEur(spec, backups) > cap) continue;
     for (const location of locations) {
       plan.push({ serverType, location, spec });
     }

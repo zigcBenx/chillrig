@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { safeNext } from "@/lib/safe-next";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore, type FormEvent } from "react";
 
@@ -118,7 +119,11 @@ export function LoginView() {
       router.push(nextPath());
       router.refresh();
     } catch (failure) {
-      setError(failure instanceof Error && failure.message === "Wrong password" ? "Wrong password" : "Sign-in failed");
+      setError(
+        failure instanceof Error && failure.message === "Wrong password"
+          ? "Wrong password. Forgot it? Use “Email me a sign-in link” below."
+          : "Sign-in failed. Try again in a moment.",
+      );
       setPending(null);
     }
   }
@@ -188,6 +193,7 @@ export function LoginView() {
     <main className="grid min-h-dvh place-items-center px-5 pb-12 pt-24">
       <div className="rise glass w-full max-w-sm px-7 py-10 text-center">
         <h1 className="headline text-3xl">Sign in</h1>
+        <p className="muted mt-2 text-sm">New here? Enter any email and a password. Your account is created on the spot.</p>
         <div className="mt-8 grid gap-3">
           {config?.oauth ? (
             <Button disabled={pending !== null} onClick={() => void signIn("github")}>
@@ -209,7 +215,7 @@ export function LoginView() {
                 type="password"
                 name="password"
                 autoComplete="current-password"
-                placeholder="Password"
+                placeholder="Password (8+ characters)"
                 minLength={8}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
@@ -218,7 +224,7 @@ export function LoginView() {
                 Continue
               </Button>
               <Button type="button" variant="ghost" disabled={pending !== null} onClick={() => void sendEmail()}>
-                Email link
+                Email me a sign-in link
               </Button>
               {sent ? (
                 <p className="muted text-center text-sm">
@@ -245,6 +251,17 @@ export function LoginView() {
           ) : null}
         </div>
         {error || urlError ? <p className="mt-4 text-sm danger">{error || urlError}</p> : null}
+        <p className="muted mt-6 text-xs">
+          By continuing you agree to the{" "}
+          <Link className="underline underline-offset-2" href="/terms">
+            Terms
+          </Link>{" "}
+          and{" "}
+          <Link className="underline underline-offset-2" href="/privacy">
+            Privacy Policy
+          </Link>
+          .
+        </p>
       </div>
     </main>
   );

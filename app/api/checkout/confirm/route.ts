@@ -17,6 +17,8 @@ export const POST = route(async (request) => {
   const owner = session.metadata?.user_id || session.client_reference_id;
   if (owner !== user.id) throw new HttpError(403, "Forbidden");
   if (session.status !== "complete") return json({ ok: false });
+  // Delayed payment methods: the webhook provisions once the money has arrived.
+  if (session.payment_status !== "paid" && session.payment_status !== "no_payment_required") return json({ ok: false, pending: true });
   await activateAndProvision(user.id, {
     customerId: stripeId(session.customer),
     subscriptionId: stripeId(session.subscription),

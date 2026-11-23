@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   await connection();
   const user = await getCurrentUser();
   const origin = new URL(request.url).origin;
-  if (!user) return NextResponse.redirect(new URL("/login", origin));
+  if (!user) return NextResponse.redirect(new URL("/login?next=%2Fgo", origin));
   const { subscription, box } = await loadAccount(user.id);
   if (!subscription || !subscriptionAllowsBox(subscription.status)) {
     return NextResponse.redirect(new URL("/checkout", origin));
