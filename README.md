@@ -119,6 +119,8 @@ sudo CHILLRIG_DOMAIN=box.example.com bash install.sh
 
 That installs Node 22, git, GitHub CLI, Docker, tmux, Caddy, ttyd, and the official `@anthropic-ai/claude-code` and `@openai/codex` packages, under an unprivileged `coder` user. Without `CHILLRIG_CONTROL_PLANE`, the terminal is behind a generated basic-auth password printed once.
 
+The box agent, terminal and tmux service live in `public/box/` (`agent.mjs`, `login-parse.mjs`, `attach.sh`, `update.sh`). `install.sh` runs `update.sh`, which takes them from this checkout when it sits next to `install.sh`, from `$CHILLRIG_CONTROL_PLANE/box/` on managed boxes, or from GitHub otherwise. Rerun `update.sh` as root to update a box; it leaves Caddy, the firewall, tmux sessions and your files alone.
+
 Managed mode (what the control plane sets):
 
 ```bash
@@ -133,7 +135,7 @@ sudo \
 
 - `app/` control-plane UI and HTTP routes
 - `lib/` auth, billing, provisioning, and the mock database
-- `install.sh` box bootstrap
+- `install.sh` box bootstrap; `public/box/` box agent and its updater
 - `supabase/migrations/` Postgres schema (`0001` through `0005`)
 - `scripts/supabase-setup.sh` and `scripts/stripe-setup.ts` for a first live deploy
 

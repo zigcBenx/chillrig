@@ -7,12 +7,14 @@ import { useAccount } from "@/components/use-account";
 import { Check } from "lucide-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export function SetupView() {
   const router = useRouter();
   const { data, error } = useAccount(3000);
   const [pending, setPending] = useState(false);
+  // Watched the box being built: go straight on to sign-in when it is ready.
+  const sawSetup = useRef(false);
 
   // Back from Stripe: the webhook can land a few seconds after the redirect. Confirm the
   // session ourselves instead of bouncing a paying customer back to the checkout page.
@@ -60,8 +62,10 @@ export function SetupView() {
       router.replace("/checkout");
       return;
     }
+    if (data.box?.status === "provisioning" || data.box?.status === "waiting") sawSetup.current = true;
     if (data.box?.status === "running") {
-      const timer = window.setTimeout(() => router.replace("/dashboard"), 700);
+      const next = sawSetup.current ? "/start" : "/dashboard";
+      const timer = window.setTimeout(() => router.replace(next), 700);
       return () => window.clearTimeout(timer);
     }
     if ((!data.box || data.box.status === "destroyed") && !confirming) router.replace("/checkout");
@@ -123,7 +127,7 @@ export function SetupView() {
           <div className="mt-8 rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-4 py-3 text-left text-sm">
             <p className="font-medium">What happens next</p>
             <p className="muted mt-1">
-              When it is ready you will connect your own Claude or ChatGPT account on the box. Have your login handy.
+              When it is ready you sign in to Claude or ChatGPT with your own plan, in two taps. Have your login handy.
             </p>
           </div>
         ) : (

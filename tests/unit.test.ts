@@ -112,7 +112,8 @@ describe("account view", () => {
 
 describe("install script", () => {
   it("keeps ttyd private and does not collect provider tokens", () => {
-    const script = readFileSync("install.sh", "utf8");
+    // The terminal and agent units moved to update.sh, which install.sh runs.
+    const script = readFileSync("install.sh", "utf8") + readFileSync("public/box/update.sh", "utf8");
     assert.match(script, /127\.0\.0\.1/);
     assert.match(script, /forward_auth/);
     assert.match(script, /-W/);

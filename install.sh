@@ -101,133 +101,28 @@ set -g history-limit 8000
 set -g mouse on
 set -g status off
 set -g detach-on-destroy off
+set -s exit-empty off
 EOF
 chown "${CHILLRIG_USER}:${CHILLRIG_USER}" "/home/${CHILLRIG_USER}/.tmux.conf"
 
-cat > /opt/chillrig/attach.sh << EOF
-#!/bin/bash
-set -euo pipefail
-export HOME=/home/${CHILLRIG_USER}
-cd "\$HOME"
-/usr/bin/tmux start-server
-if ! /usr/bin/tmux has-session -t chillrig 2>/dev/null; then
-  /usr/bin/tmux new-session -d -s chillrig -c "\$HOME"
+# Agent, browser terminal and tmux service come from update.sh, the same script that
+# updates a running box later, so a new box and an updated one end up identical.
+# Managed boxes fetch it from the control plane; a checkout uses its own copy;
+# otherwise it comes from GitHub.
+CHILLRIG_ASSETS_URL="${CHILLRIG_ASSETS_URL:-}"
+if [[ -z "$CHILLRIG_ASSETS_URL" && -n "$CHILLRIG_CONTROL_PLANE" ]]; then
+  CHILLRIG_ASSETS_URL="${CHILLRIG_CONTROL_PLANE}/box"
 fi
-exec /usr/bin/tmux attach -t chillrig
-EOF
-chmod 0755 /opt/chillrig/attach.sh
-
-cat > /opt/chillrig/agent.mjs << 'EOF'
-import http from "node:http";
-import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-
-const user = process.env.CHILLRIG_USER || "coder";
-const home = `/home/${user}`;
-
-function send(res, code, body) {
-  const data = JSON.stringify(body);
-  res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-  res.end(data);
-}
-
-function readJson(req) {
-  return new Promise((resolve, reject) => {
-    let raw = "";
-    req.on("data", (chunk) => {
-      raw += chunk;
-      if (raw.length > 8000) reject(new Error("too large"));
-    });
-    req.on("end", () => {
-      if (!raw) return resolve({});
-      try {
-        resolve(JSON.parse(raw));
-      } catch {
-        reject(new Error("json"));
-      }
-    });
-  });
-}
-
-function parseRepo(input) {
-  if (typeof input !== "string" || input.length > 200 || /\s/.test(input)) return null;
-  let url;
-  try {
-    url = new URL(input);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== "https:" || url.hostname !== "github.com" || url.username || url.password || url.search) return null;
-  const match = url.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/);
-  if (!match) return null;
-  const owner = match[1];
-  const repo = match[2];
-  if (!owner || !repo || owner.startsWith(".") || repo.startsWith(".")) return null;
-  return { cloneUrl: `https://github.com/${owner}/${repo}.git`, repo };
-}
-
-function isPort(value) {
-  return Number.isInteger(value) && value >= 1024 && value <= 65535 && value !== 7681 && value !== 7682;
-}
-
-function run(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, options);
-    const timer = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs || 120000);
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new Error("command failed"));
-    });
-  });
-}
-
-const server = http.createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url || "/", "http://127.0.0.1");
-    const route = url.pathname.replace(/^\/_chillrig/, "") || "/";
-    if (req.method === "GET" && route === "/health") {
-      const ready = existsSync("/var/lib/chillrig/ready");
-      return send(res, ready ? 200 : 503, { ok: ready });
-    }
-    if (req.method === "POST" && route === "/clone") {
-      const body = await readJson(req);
-      const repo = parseRepo(body.url);
-      if (!repo) return send(res, 400, { error: "Invalid GitHub URL" });
-      const dest = `${home}/projects/${repo.repo}`;
-      if (existsSync(dest)) return send(res, 409, { error: "Already cloned" });
-      await run("runuser", ["-u", user, "--", "git", "clone", "--depth", "1", repo.cloneUrl, dest], {
-        env: { HOME: home, USER: user, LOGNAME: user, PATH: process.env.PATH, GIT_TERMINAL_PROMPT: "0" },
-      });
-      return send(res, 200, { ok: true, path: `~/projects/${repo.repo}` });
-    }
-    if (req.method === "POST" && route === "/port") {
-      const body = await readJson(req);
-      const port = Number(body.port);
-      if (!isPort(port)) return send(res, 400, { error: "Invalid port" });
-      const template = readFileSync("/etc/chillrig/Caddyfile.tmpl", "utf8");
-      writeFileSync("/etc/caddy/Caddyfile", template.replaceAll("__APP_PORT__", String(port)));
-      writeFileSync("/etc/chillrig/app_port", String(port));
-      await run("caddy", ["reload", "--config", "/etc/caddy/Caddyfile"], { timeoutMs: 20000 });
-      return send(res, 200, { ok: true, port });
-    }
-    return send(res, 404, { error: "Not found" });
-  } catch {
-    if (!res.headersSent) send(res, 500, { error: "Failed" });
-  }
-});
-
-server.listen(7682, "127.0.0.1");
-EOF
-
-cat > /etc/chillrig/env << EOF
-CHILLRIG_USER=${CHILLRIG_USER}
-EOF
-chmod 0644 /etc/chillrig/env
+export CHILLRIG_USER CHILLRIG_CONTROL_PLANE CHILLRIG_ASSETS_URL CHILLRIG_UPDATE_NO_START=1
+local_assets="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/public/box"
+if [[ -f "${local_assets}/update.sh" && -f "${local_assets}/agent.mjs" ]]; then
+  CHILLRIG_ASSETS_DIR="$local_assets" bash "${local_assets}/update.sh"
+else
+  assets="${CHILLRIG_ASSETS_URL:-https://raw.githubusercontent.com/zigcBenx/chillrig/main/public/box}"
+  curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors --max-time 60 -o /opt/chillrig/update.sh "${assets}/update.sh"
+  bash /opt/chillrig/update.sh
+fi
+unset CHILLRIG_UPDATE_NO_START
 
 # No Cloudflare zone: the VM names itself <ip-with-dashes>.sslip.io so Let's Encrypt
 # can issue a certificate without any DNS records of our own.
@@ -371,41 +266,6 @@ sed "s/__APP_PORT__/${CHILLRIG_APP_PORT}/g" /etc/chillrig/Caddyfile.tmpl > /etc/
 printf '%s\n' "$CHILLRIG_APP_PORT" > /etc/chillrig/app_port
 caddy validate --config /etc/caddy/Caddyfile
 
-cat > /etc/systemd/system/chillrig-agent.service << EOF
-[Unit]
-Description=Chillrig box agent
-After=network-online.target
-
-[Service]
-Type=simple
-EnvironmentFile=/etc/chillrig/env
-ExecStart=/usr/bin/node /opt/chillrig/agent.mjs
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-cat > /etc/systemd/system/chillrig-ttyd.service << EOF
-[Unit]
-Description=Chillrig terminal
-After=network-online.target
-
-[Service]
-Type=simple
-User=${CHILLRIG_USER}
-Group=${CHILLRIG_USER}
-WorkingDirectory=/home/${CHILLRIG_USER}
-Environment=HOME=/home/${CHILLRIG_USER}
-ExecStart=/usr/local/bin/ttyd -W -i 127.0.0.1 -p 7681 -b /ttyd -m 4 -H X-Chillrig-Auth /opt/chillrig/attach.sh
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
 if [[ "$CHILLRIG_CLOSE_SSH" == "1" ]]; then
   install -d /etc/ssh/sshd_config.d
   cat > /etc/ssh/sshd_config.d/99-chillrig.conf << 'EOF'
@@ -463,13 +323,10 @@ if [[ "$CHILLRIG_CLOSE_SSH" == "1" && -z "${SSH_CONNECTION:-}" ]]; then
   done
 fi
 
-runuser -u "$CHILLRIG_USER" -- tmux start-server
-if ! runuser -u "$CHILLRIG_USER" -- tmux has-session -t chillrig 2>/dev/null; then
-  runuser -u "$CHILLRIG_USER" -- tmux new-session -d -s chillrig -c "/home/${CHILLRIG_USER}"
-fi
-
 systemctl daemon-reload
-systemctl enable chillrig-agent chillrig-ttyd caddy
+systemctl enable chillrig-tmux chillrig-agent chillrig-ttyd caddy
+# Start, never restart, tmux: restarting would not end sessions, but there is no need.
+systemctl start chillrig-tmux
 systemctl restart chillrig-agent chillrig-ttyd caddy
 if [[ -n "$CHILLRIG_DOMAIN" ]]; then
   systemctl enable --now chillrig-tls.service

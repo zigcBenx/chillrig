@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useAccount } from "@/components/use-account";
+import { connectBox } from "@/lib/box-client";
 import { AppWindow, Check, Copy, GitBranch, Terminal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -20,6 +21,23 @@ export function DashboardView() {
   const [message, setMessage] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [pending, setPending] = useState(false);
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  const running = data?.box?.status === "running";
+
+  // One look at the box (not a poll): is Claude or ChatGPT signed in yet?
+  useEffect(() => {
+    if (!running) return;
+    let cancel = false;
+    connectBox()
+      .then((client) => client.status())
+      .then((status) => {
+        if (!cancel) setSignedIn(status.claude.loggedIn || status.codex.loggedIn);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancel = true;
+    };
+  }, [running]);
 
   useEffect(() => {
     if (!data) return;
@@ -89,7 +107,6 @@ export function DashboardView() {
   }
 
   const box = data.box;
-  const running = box.status === "running";
   const actions = [
     { href: "/connect/claude", label: "Claude", hint: "Connect", icon: <SparkIcon /> },
     { href: "/connect/chatgpt", label: "ChatGPT", hint: "Connect", icon: <OrbitIcon /> },
@@ -122,14 +139,26 @@ export function DashboardView() {
         {box.error ? <p className="mt-3 text-sm danger">{box.error}</p> : null}
       </section>
 
+      {running && signedIn === false ? (
+        <Link href="/start" className="glass glass-live mt-3 flex items-center justify-between gap-4 p-6 sm:p-8">
+          <span>
+            <span className="block text-lg font-semibold tracking-tight">Finish setup</span>
+            <span className="muted mt-1 block text-sm">Sign in to Claude or ChatGPT. Two taps, no terminal.</span>
+          </span>
+          <span className="btn btn-sm shrink-0">Continue</span>
+        </Link>
+      ) : null}
+
       {running ? (
         <section className="glass mt-3 p-6 sm:p-8">
           <h2 className="text-lg font-semibold tracking-tight">Start here</h2>
           <ol className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
             <li className="rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-4 py-3">
-              <span className="font-medium">1. Connect your AI</span>
+              <Link href="/start" className="font-medium underline-offset-2 hover:underline">
+                1. Connect your AI
+              </Link>
               <span className="muted mt-1 block">
-                Tap Claude or ChatGPT below and sign in with your own plan. One time only.
+                Sign in to Claude or ChatGPT with your own plan. One time only.
               </span>
             </li>
             <li className="rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-4 py-3">

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-const PROTECTED = ["/dashboard", "/setup", "/checkout", "/terminal", "/preview", "/connect"];
+const PROTECTED = ["/dashboard", "/setup", "/checkout", "/terminal", "/preview", "/connect", "/start"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -18,5 +18,5 @@ function hasAuthCookie(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/setup", "/checkout", "/terminal", "/preview", "/connect/:path*"],
+  matcher: ["/dashboard/:path*", "/setup", "/checkout", "/terminal", "/preview", "/connect/:path*", "/start"],
 };

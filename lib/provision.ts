@@ -506,6 +506,28 @@ export async function setBoxPort(userId: string, value: unknown) {
   return port;
 }
 
+/**
+ * Which agent the box runs, for the browser when it cannot reach the box itself.
+ * Reads the public /_chillrig/health: v1 answers without a version, v2+ with one.
+ * No ticket and no user data, and only called after a direct browser call failed.
+ */
+export async function probeBoxAgent(userId: string) {
+  const box = await runningBox(userId);
+  if (isMockMode()) return { reachable: true, version: 2 };
+  try {
+    const response = await fetch(`https://${boxHostname(box, domainName())}/_chillrig/health`, {
+      cache: "no-store",
+      redirect: "manual",
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) return { reachable: false, version: null };
+    const body = (await response.json().catch(() => ({}))) as { version?: unknown };
+    return { reachable: true, version: typeof body.version === "number" ? body.version : 1 };
+  } catch {
+    return { reachable: false, version: null };
+  }
+}
+
 export function issueBoxTicket(userId: string, box: Box) {
   if (box.status !== "running" && box.status !== "provisioning") {
     throw new HttpError(409, "The box is not running");
