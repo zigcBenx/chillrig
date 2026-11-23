@@ -28,6 +28,8 @@ async function hetzner(pathname: string, init?: RequestInit) {
 export type CreatedServer = {
   id: number;
   ipv4: string | null;
+  /** The server's IPv6 network, e.g. 2a01:4f8:c17:8ade::/64. */
+  ipv6?: string | null;
   status: string;
 };
 
@@ -148,12 +150,13 @@ function readServer(value: unknown): CreatedServer {
   const server = value as {
     id?: number;
     status?: string;
-    public_net?: { ipv4?: { ip?: string } };
+    public_net?: { ipv4?: { ip?: string }; ipv6?: { ip?: string } };
   };
   if (!server?.id) throw new Error("Hetzner did not return a server");
   return {
     id: server.id,
     status: server.status ?? "initializing",
     ipv4: server.public_net?.ipv4?.ip ?? null,
+    ipv6: server.public_net?.ipv6?.ip ?? null,
   };
 }

@@ -259,6 +259,7 @@ forward_auth ${CHILLRIG_CONTROL_PLANE} {
 	header_up X-Chillrig-Ticket {http.request.uri.query.ticket}
 	header_up X-Chillrig-Ticket-Header {http.request.header.X-Chillrig-Ticket}
 	header_up X-Forwarded-Host {http.request.host}
+	header_up X-Chillrig-Host {http.request.host}
 }
 EOF
 else
@@ -455,7 +456,8 @@ keep_established
 if [[ "$CHILLRIG_CLOSE_SSH" == "1" && -z "${SSH_CONNECTION:-}" ]]; then
   # Delete every SSH allow, including "22/tcp" and "OpenSSH", highest number first.
   while true; do
-    num=$(ufw status numbered | grep ALLOW | grep -E 'OpenSSH|22/tcp' | sed -n 's/^\[\s*\([0-9][0-9]*\)\].*/\1/p' | tail -1)
+    # grep exits 1 once no SSH rule is left; with pipefail that would abort the install.
+    num=$(ufw status numbered | grep ALLOW | grep -E 'OpenSSH|22/tcp' | sed -n 's/^\[\s*\([0-9][0-9]*\)\].*/\1/p' | tail -1 || true)
     [[ -n "${num}" ]] || break
     ufw --force delete "$num" >/dev/null 2>&1 || break
   done

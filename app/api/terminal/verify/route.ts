@@ -7,10 +7,19 @@ export async function GET(request: Request) {
     request.headers.get("x-chillrig-ticket"),
     request.headers.get("x-chillrig-ticket-header"),
   );
-  const host = request.headers.get("x-forwarded-host") ?? "";
-  if (!ticket || !host) return new Response(null, { status: 401 });
+  // The box's Caddy sends its own hostname. X-Chillrig-Host is the reliable one: on
+  // Cloudflare Workers the OpenNext adapter folds X-Forwarded-Host into Host, so check
+  // every place the name can land.
+  const hosts = [
+    request.headers.get("x-chillrig-host"),
+    request.headers.get("x-forwarded-host"),
+    request.headers.get("host"),
+  ].filter((value): value is string => Boolean(value));
+  if (!ticket || hosts.length === 0) return new Response(null, { status: 401 });
   try {
-    const ok = await verifyBoxTicket(ticket, host);
+    const sourceIp = request.headers.get("cf-connecting-ip");
+    const ok = await verifyBoxTicket(ticket, hosts, sourceIp);
+    if (!ok) console.warn("terminal verify rejected", { hosts: hosts.map((h) => h.slice(0, 80)), sourceIp });
     return new Response(null, { status: ok ? 200 : 401 });
   } catch (error) {
     console.error(error instanceof Error ? error.message.slice(0, 200) : "verify");
