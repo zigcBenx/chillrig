@@ -190,14 +190,9 @@ export function LoginView() {
         <h1 className="headline text-3xl">Sign in</h1>
         <div className="mt-8 grid gap-3">
           {config?.oauth ? (
-            <>
-              <Button disabled={pending !== null} onClick={() => void signIn("google")}>
-                Google
-              </Button>
-              <Button variant="ghost" disabled={pending !== null} onClick={() => void signIn("github")}>
-                GitHub
-              </Button>
-            </>
+            <Button disabled={pending !== null} onClick={() => void signIn("github")}>
+              Continue with GitHub
+            </Button>
           ) : null}
           {config?.emailLogin ? (
             <form className={`${config.oauth ? "mt-2 " : ""}grid gap-3 text-left`} onSubmit={(event) => void continueWithPassword(event)}>
