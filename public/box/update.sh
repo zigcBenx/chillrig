@@ -12,7 +12,12 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-env_get() { sed -n "s/^$1=//p" /etc/chillrig/env 2>/dev/null | tail -1; }
+# A fresh box has no /etc/chillrig/env yet. A missing file or key must give "" and
+# status 0, or pipefail plus errexit aborts this script (and install.sh with it).
+env_get() {
+  [[ -f /etc/chillrig/env ]] || return 0
+  sed -n "s/^$1=//p" /etc/chillrig/env 2>/dev/null | tail -1 || true
+}
 CHILLRIG_USER="${CHILLRIG_USER:-$(env_get CHILLRIG_USER)}"
 CHILLRIG_USER="${CHILLRIG_USER:-coder}"
 CHILLRIG_CONTROL_PLANE="${CHILLRIG_CONTROL_PLANE:-$(env_get CHILLRIG_CONTROL_PLANE)}"

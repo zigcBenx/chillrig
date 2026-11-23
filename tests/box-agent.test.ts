@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { renderUserData } from "../lib/cloud-init";
 import { cleanCode } from "../lib/box-client";
@@ -200,5 +203,47 @@ describe("box agent and update script", () => {
       CHILLRIG_CLOSE_SSH: "1",
     });
     assert.ok(Buffer.byteLength(userData) < 32_000, `user_data is ${Buffer.byteLength(userData)} bytes`);
+  });
+});
+
+describe("update.sh env_get on a fresh box", () => {
+  const update = readFileSync("public/box/update.sh", "utf8");
+  const envGet = update.match(/^env_get\(\) \{\n[\s\S]*?\n\}$/m)?.[0];
+
+  // Runs env_get under the same strict mode as update.sh, pointed at envFile.
+  function run(envFile: string) {
+    assert.ok(envGet, "env_get() not found in update.sh");
+    const script = [
+      "set -euo pipefail",
+      envGet.replaceAll("/etc/chillrig/env", envFile),
+      'A="${A:-$(env_get CHILLRIG_ALLOWED_ORIGINS)}"',
+      'B="${B:-$(env_get CHILLRIG_USER)}"',
+      'printf "ok|%s|%s" "$A" "$B"',
+    ].join("\n");
+    return spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...process.env } });
+  }
+
+  it("gives empty values and exit 0 when /etc/chillrig/env does not exist", () => {
+    const dir = mkdtempSync(join(tmpdir(), "chillrig-env-"));
+    try {
+      const result = run(join(dir, "missing"));
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "ok||");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the last value of a key and gives empty for a missing key", () => {
+    const dir = mkdtempSync(join(tmpdir(), "chillrig-env-"));
+    try {
+      const file = join(dir, "env");
+      writeFileSync(file, "CHILLRIG_USER=old\nCHILLRIG_USER=coder\n");
+      const result = run(file);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "ok||coder");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
