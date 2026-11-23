@@ -73,8 +73,10 @@ async function webhook() {
 }
 
 async function portal() {
-  const defaults = await stripe.billingPortal.configurations.list({ is_default: true, limit: 1 });
-  const current = defaults.data[0];
+  // Use a Chillrig-tagged configuration, never the account default: the Stripe account
+  // may also bill other products.
+  const listed = await stripe.billingPortal.configurations.list({ active: true, limit: 100 });
+  const current = listed.data.find((item) => item.metadata?.chillrig === "1");
   if (current) {
     const updated = await stripe.billingPortal.configurations.update(current.id, {
       default_return_url: `${appUrl}/dashboard`,

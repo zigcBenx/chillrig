@@ -47,7 +47,18 @@ export const POST = route(async (request) => {
     cancel_url: `${origin}/checkout`,
     metadata: { user_id: user.id },
     subscription_data: { metadata: { user_id: user.id } },
+    // Business buyers can add a VAT ID. The billing address is needed for VAT either way.
+    billing_address_collection: "required",
+    tax_id_collection: { enabled: true },
+    customer_update: { address: "auto", name: "auto" },
+    // Stripe Tax computes VAT once it is active on the account (prices are tax-inclusive).
+    ...(automaticTaxEnabled() ? { automatic_tax: { enabled: true } } : {}),
   });
   if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
   return json({ url: session.url });
 });
+
+function automaticTaxEnabled() {
+  const flag = process.env.STRIPE_AUTOMATIC_TAX?.trim().toLowerCase();
+  return flag === "1" || flag === "true" || flag === "yes";
+}
