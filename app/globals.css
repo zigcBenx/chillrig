@@ -534,6 +534,73 @@
     border: 1px solid var(--chip-border);
   }
 
+  /* Connect steps: a checklist you tap through, so it must not read as a
+     form field. Only the current step gets a glass pill. */
+  .step {
+    display: flex;
+    width: 100%;
+    min-height: 2.75rem;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.375rem 0.875rem 0.375rem 0.4375rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    line-height: 1.2;
+    color: var(--muted);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+  }
+
+  .step:hover {
+    color: var(--fg);
+    background: color-mix(in oklab, var(--fg) 5%, transparent);
+  }
+
+  .step[aria-current="step"] {
+    color: var(--fg);
+    background: var(--glass-pill-fill), var(--glass-base);
+    border-color: var(--glass-border);
+    box-shadow: var(--glass-pill-shadow);
+  }
+
+  .step-num {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 50%;
+    background: var(--chip-fill);
+    border: 1px solid var(--chip-border);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .step[aria-current="step"] .step-num {
+    background: var(--accent);
+    border-color: transparent;
+    color: var(--accent-fg);
+    box-shadow: var(--accent-shadow);
+  }
+
+  /* Three across on a phone: the number sits on top of its label. */
+  @media (width < 40rem) {
+    .step {
+      flex-direction: column;
+      justify-content: center;
+      gap: 0.375rem;
+      padding: 0.625rem 0.25rem 0.5rem;
+      border-radius: 20px;
+      font-size: 0.8125rem;
+      text-align: center;
+      text-wrap: balance;
+    }
+  }
+
   .overlay {
     position: fixed;
     inset: 0;
