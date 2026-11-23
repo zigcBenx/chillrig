@@ -34,7 +34,7 @@ export function toAccountView(input: {
           status: visible.status,
           hostname: hostname ?? "",
           appPort: visible.appPort,
-          error: visible.error,
+          error: visible.error?.startsWith("placement-failed:") ? null : visible.error,
           clone: visible.githubClone
             ? { url: visible.githubClone.url, path: visible.githubClone.path }
             : null,

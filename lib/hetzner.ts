@@ -64,6 +64,23 @@ export async function createServer(input: {
   return readServer(data.server);
 }
 
+/**
+ * The server with this exact name, if any. Hetzner sometimes answers a create with a 5xx
+ * ("service unavailable") and still creates the server, so check before moving on.
+ */
+export async function findServerByName(name: string): Promise<(CreatedServer & { serverType?: string; location?: string }) | null> {
+  const data = (await hetzner(`/servers?name=${encodeURIComponent(name)}`)) as {
+    servers?: Array<{ server_type?: { name?: string }; datacenter?: { location?: { name?: string } }; location?: { name?: string } }>;
+  };
+  const server = data.servers?.[0];
+  if (!server) return null;
+  return {
+    ...readServer(server),
+    serverType: server.server_type?.name,
+    location: server.location?.name ?? server.datacenter?.location?.name,
+  };
+}
+
 export async function getServer(id: number): Promise<CreatedServer | null> {
   const token = requireLiveValue("HETZNER_API_TOKEN", process.env.HETZNER_API_TOKEN);
   const response = await fetch(`https://api.hetzner.cloud/v1/servers/${id}`, {
@@ -74,6 +91,24 @@ export async function getServer(id: number): Promise<CreatedServer | null> {
   const data = (await response.json()) as { error?: { message?: string }; server?: unknown };
   if (!response.ok) throw new Error(data.error?.message || "Hetzner lookup failed");
   return readServer(data.server);
+}
+
+/** Which locations each server type is in stock at right now, or null if Hetzner did not say. */
+export async function serverTypeStock(): Promise<Map<string, Set<string>> | null> {
+  try {
+    const data = (await hetzner("/server_types?per_page=50")) as {
+      server_types?: Array<{ name: string; locations?: Array<{ name: string; available?: boolean }> }>;
+    };
+    const types = data.server_types ?? [];
+    if (!types.some((type) => Array.isArray(type.locations))) return null;
+    const stock = new Map<string, Set<string>>();
+    for (const type of types) {
+      stock.set(type.name, new Set((type.locations ?? []).filter((item) => item.available).map((item) => item.name)));
+    }
+    return stock;
+  } catch {
+    return null;
+  }
 }
 
 export type ListedServer = { id: number; name: string; created: string; labels: Record<string, string> };

@@ -7,15 +7,17 @@ import { renderUserData } from "@/lib/cloud-init";
 import { sendReadyEmail } from "@/lib/email";
 import { parseGitHubRepo } from "@/lib/github";
 import { boxHostname, cloudflareConfigured, sslipHostname } from "@/lib/hostname";
-import { fallbackNotice, maxMonthlyEur, placementPlan } from "@/lib/hetzner-types";
+import { fallbackNotice, inStock, maxMonthlyEur, placementPlan } from "@/lib/hetzner-types";
 import {
   createFirewall,
   createServer,
   deleteFirewallWhenFree,
   deleteServer,
   enableBackup,
+  findServerByName,
   getServer,
   isCapacityError,
+  serverTypeStock,
 } from "@/lib/hetzner";
 import { HttpError, publicError } from "@/lib/http";
 import { isMockMode, mockProvisionMs } from "@/lib/mode";
@@ -29,6 +31,16 @@ import type { Box, Subscription, SubscriptionStatus } from "@/lib/types";
 
 const PROVISION_TIMEOUT_MS = 20 * 60 * 1000;
 const RESUME_AFTER_MS = 90 * 1000;
+/** Internal marker in box.error while waiting: skip a placement Hetzner just dropped. */
+const PLACEMENT_FAILED = "placement-failed:";
+const PLACEMENT_SKIP_MS = 30 * 60 * 1000;
+
+function recentlyFailedPlacement(error: string | null) {
+  if (!error?.startsWith(PLACEMENT_FAILED)) return null;
+  const [placement, at] = error.slice(PLACEMENT_FAILED.length).split(":");
+  if (!placement || Date.now() - Number(at) > PLACEMENT_SKIP_MS) return null;
+  return placement;
+}
 
 export async function loadAccount(userId: string) {
   await syncBox(userId);
@@ -169,7 +181,7 @@ async function continueLiveProvision(box: Box) {
     CHILLRIG_SLUG: box.slug,
     CHILLRIG_CLOSE_SSH: "1",
   });
-  const plan = placementPlan({
+  const fullPlan = placementPlan({
     types: process.env.HETZNER_SERVER_TYPES,
     singleType: process.env.HETZNER_SERVER_TYPE,
     locations: process.env.HETZNER_LOCATIONS,
@@ -177,6 +189,19 @@ async function continueLiveProvision(box: Box) {
     maxMonthlyEur: maxMonthlyEur(process.env.HETZNER_MAX_MONTHLY_EUR),
     backups: backupsEnabled(),
   });
+  const skip = recentlyFailedPlacement(box.error);
+  const plan = inStock(fullPlan, await serverTypeStock()).filter(
+    (item) => `${item.serverType}@${item.location}` !== skip,
+  );
+  if (plan.length === 0) {
+    box.status = "waiting";
+    box.error = skip ? box.error : null;
+    box.hetznerServerId = null;
+    box.lastSyncAt = new Date().toISOString();
+    await store().saveBox(box);
+    console.warn("No Hetzner type under the monthly cap is in stock; waiting");
+    return box;
+  }
   // Firewall first (ports 80/443 + ICMP), then pass it to the create call so the box is
   // never reachable unfiltered and no post-create attach can race the network setup.
   if (!box.hetznerFirewallId) {
@@ -201,6 +226,15 @@ async function continueLiveProvision(box: Box) {
       break;
     } catch (error) {
       lastError = error;
+      // A 5xx can still have created the server. Adopt it instead of leaving it to bill
+      // unseen (and the next attempt would fail on the duplicate name anyway).
+      const ghost = await findServerByName(`box-${box.slug}`).catch(() => null);
+      if (ghost) {
+        created = ghost;
+        placed = plan.find((item) => item.serverType === ghost.serverType && item.location === ghost.location) ?? attempt;
+        console.warn(`Hetzner create for box-${box.slug} errored but the server exists; adopting ${ghost.id}`);
+        break;
+      }
       if (!isCapacityError(error)) break;
       console.warn(`Hetzner ${attempt.serverType} in ${attempt.location} is unavailable`);
     }
@@ -208,7 +242,7 @@ async function continueLiveProvision(box: Box) {
   if (!created || !placed) {
     if (!lastError || isCapacityError(lastError)) {
       box.status = "waiting";
-      box.error = null;
+      box.error = skip ? box.error : null;
       box.hetznerServerId = null;
       box.lastSyncAt = new Date().toISOString();
       await store().saveBox(box);
@@ -307,6 +341,22 @@ async function syncLive(id: string) {
   try {
     const server = await getServer(box.hetznerServerId);
     if (!server) {
+      if (box.status === "provisioning" && !box.readyAt) {
+        // Hetzner accepted the create but could not place it and removed the server
+        // (seen when a type sells out). Not the customer's fault: go back to waiting,
+        // keep the firewall, and syncBox tries the next in-stock placement in a minute.
+        console.warn(`Hetzner removed server ${box.hetznerServerId} (${box.serverType} in ${box.region}) during setup; waiting`);
+        if (box.dnsRecordId) await deleteDnsRecord(box.dnsRecordId).catch(() => undefined);
+        box.status = "waiting";
+        box.error = `${PLACEMENT_FAILED}${box.serverType}@${box.region}:${Date.now()}`;
+        box.hetznerServerId = null;
+        box.ipv4 = null;
+        box.hostname = null;
+        box.dnsRecordId = null;
+        box.lastSyncAt = new Date().toISOString();
+        await store().saveBox(box);
+        return box;
+      }
       box.status = "error";
       box.error = "The machine is gone";
       await store().saveBox(box);

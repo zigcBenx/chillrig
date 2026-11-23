@@ -5,6 +5,7 @@ import { SUPPORT_EMAIL } from "@/lib/links";
 import { Button } from "@/components/ui/button";
 import { useAccount } from "@/components/use-account";
 import { Check } from "lucide-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -78,16 +79,11 @@ export function SetupView() {
   return (
     <main className="grid min-h-dvh place-items-center px-5 pb-12 pt-24">
       <div className="rise glass w-full max-w-md px-8 py-12 text-center">
-        <div className="relative mx-auto h-28 w-28">
-          <div className="absolute inset-0 rounded-full border border-[var(--chip-border)]" />
-          {!failed ? (
-            <div className="orbit">
-              <i />
-            </div>
-          ) : null}
-          <div className="glass absolute inset-4 grid place-items-center rounded-full">
-            <span className={`h-3 w-3 rounded-full ${failed ? "bg-[#d06a6a]" : "bg-[var(--signal)] shadow-[0_0_16px_var(--signal)]"}`} />
+        <div className="setup-logo-stage mx-auto h-32 w-32" role="img" aria-label={failed ? "Setup stopped" : "Setting up"}>
+          <div className={`setup-logo${failed ? " is-failed" : ""}`}>
+            <Image src="/logo.webp" alt="" width={88} height={88} unoptimized priority />
           </div>
+          <div className="setup-logo-shadow" />
         </div>
         <h1 className="headline mt-8 text-3xl">
           {failed

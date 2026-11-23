@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { subscriptionAllowsBox, subscriptionEndsBox } from "../lib/billing-policy";
-import { effectiveMonthlyEur, fallbackNotice, isPricierThanPlan, placementPlan, PLAN_MONTHLY_EUR } from "../lib/hetzner-types";
+import { effectiveMonthlyEur, fallbackNotice, inStock, isPricierThanPlan, placementPlan, PLAN_MONTHLY_EUR } from "../lib/hetzner-types";
 import { renderUserData } from "../lib/cloud-init";
 import { boxHostname, sslipHostname } from "../lib/hostname";
 import { parseGitHubRepo } from "../lib/github";
@@ -129,7 +129,7 @@ describe("install script", () => {
     assert.ok(script.indexOf("ufw allow 22/tcp") < script.indexOf("ufw --force enable"));
     assert.ok(script.indexOf("ufw allow 22/tcp") < script.indexOf("ufw default deny incoming"));
     const defaults = placementPlan();
-    assert.deepEqual([...new Set(defaults.map((item) => item.serverType))], ["cx33", "cax21", "cx23"]);
+    assert.deepEqual([...new Set(defaults.map((item) => item.serverType))], ["cx33", "cax21", "cx23", "cax11"]);
     assert.equal(placementPlan({ types: "cpx32,cx33", maxMonthlyEur: 12 }).every((item) => item.serverType === "cx33"), true);
     assert.equal(placementPlan({ types: "cpx32", maxMonthlyEur: 12 }).length, 0);
     const plan = placementPlan({
@@ -150,7 +150,7 @@ describe("install script", () => {
     assert.equal(placementPlan({ preferredLocation: "hel1" })[0]?.location, "hel1");
     // The cap covers the whole bill: IPv4 always, backups when on.
     const withBackups = [...new Set(placementPlan({ maxMonthlyEur: 12, backups: true }).map((item) => item.serverType))];
-    assert.deepEqual(withBackups, ["cx33", "cx23"]);
+    assert.deepEqual(withBackups, ["cx33", "cx23", "cax11"]);
     assert.ok(placementPlan({ maxMonthlyEur: 12, backups: true }).every((item) => effectiveMonthlyEur(item.spec!, true) <= 12));
     assert.equal(placementPlan({ types: "cax21", maxMonthlyEur: 11.4 }).length, 0);
     assert.equal(effectiveMonthlyEur({ monthlyEur: 10.99 }, true), 10.99 * 1.2 + 0.5);
@@ -163,6 +163,12 @@ describe("install script", () => {
     assert.match(fallbackNotice(plan[3]!, primary) ?? "", /pricier than the €8.49/);
     assert.doesNotMatch(fallbackNotice(plan.at(-1)!, primary) ?? "", /pricier/);
     assert.equal(PLAN_MONTHLY_EUR, 8.49);
+    const stock = new Map([["cx33", new Set<string>()], ["cax11", new Set(["hel1"])]]);
+    assert.deepEqual(
+      inStock(placementPlan(), stock).map((item) => `${item.serverType}@${item.location}`),
+      ["cax11@hel1"],
+    );
+    assert.equal(inStock(placementPlan(), null).length, placementPlan().length);
     assert.equal(subscriptionAllowsBox("past_due"), true);
     assert.equal(subscriptionAllowsBox("active"), true);
     assert.equal(subscriptionAllowsBox("canceled"), false);
