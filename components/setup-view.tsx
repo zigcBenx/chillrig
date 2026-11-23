@@ -38,14 +38,14 @@ export function SetupView() {
     <main className="grid min-h-dvh place-items-center px-5 pb-12 pt-24">
       <div className="rise glass w-full max-w-md px-8 py-12 text-center">
         <div className="relative mx-auto h-28 w-28">
-          <div className="absolute inset-0 rounded-full border border-white/50 dark:border-white/15" />
+          <div className="absolute inset-0 rounded-full border border-[var(--chip-border)]" />
           {!failed ? (
             <div className="orbit">
               <i />
             </div>
           ) : null}
           <div className="glass absolute inset-4 grid place-items-center rounded-full">
-            <span className={`h-3 w-3 rounded-full ${failed ? "bg-[#d06a6a]" : "bg-emerald-400 shadow-[0_0_16px_#34d399]"}`} />
+            <span className={`h-3 w-3 rounded-full ${failed ? "bg-[#d06a6a]" : "bg-[var(--signal)] shadow-[0_0_16px_var(--signal)]"}`} />
           </div>
         </div>
         <h1 className="headline mt-8 text-3xl">
@@ -55,7 +55,7 @@ export function SetupView() {
         <ul className="mt-8 space-y-3 text-left">
           {data?.steps.map((step) => (
             <li key={step.id} className="flex items-center gap-3 text-sm">
-              <span className="grid h-6 w-6 place-items-center rounded-full bg-black/5 dark:bg-white/10">
+              <span className="grid h-6 w-6 place-items-center rounded-full bg-[var(--chip-fill)]">
                 {step.state === "done" ? <Check className="h-3.5 w-3.5" /> : <span className={`h-1.5 w-1.5 rounded-full ${step.state === "current" ? "bg-current" : "bg-current/25"}`} />}
               </span>
               <span className={step.state === "todo" ? "muted" : ""}>{step.label}</span>

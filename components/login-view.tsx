@@ -249,7 +249,7 @@ export function LoginView() {
             </form>
           ) : null}
         </div>
-        {error || urlError ? <p className="mt-4 text-sm text-[#9b3b3b] dark:text-[#ffb4b4]">{error || urlError}</p> : null}
+        {error || urlError ? <p className="mt-4 text-sm danger">{error || urlError}</p> : null}
       </div>
     </main>
   );

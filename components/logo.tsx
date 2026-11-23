@@ -1,11 +1,20 @@
+import Image from "next/image";
 import Link from "next/link";
+
+/** The Chillrig mascot. `size` is the rendered width and height in pixels. */
+export function LogoMark({ size = 36 }: { size?: number }) {
+  return <Image src="/logo.webp" alt="" width={size} height={size} unoptimized priority className="logo-mark" />;
+}
+
+/** The large mascot used as an illustration. */
+export function Mascot({ size, className }: { size: number; className?: string }) {
+  return <Image src="/mascot.webp" alt="" width={size} height={size} unoptimized className={className} />;
+}
 
 export function Logo() {
   return (
-    <Link href="/" className="inline-flex items-center gap-2 font-semibold tracking-tight">
-      <span className="grid h-7 w-7 place-items-center rounded-[10px] bg-[#1d1d1f] dark:bg-white">
-        <span className="pulse h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_10px_#34d399]" />
-      </span>
+    <Link href="/" className="inline-flex h-11 items-center gap-2.5 text-[17px] font-semibold tracking-tight">
+      <LogoMark />
       Chillrig
     </Link>
   );

@@ -2,7 +2,9 @@
 
 import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { useRouter } from "next/navigation";
+import { GITHUB_URL } from "@/lib/links";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { SessionUser } from "@/lib/types";
@@ -11,6 +13,7 @@ type SessionState = { user: SessionUser | null; mock: boolean };
 
 export function Shell({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const landing = usePathname() === "/";
   const [session, setSession] = useState<SessionState | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -39,14 +42,23 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div className="relative min-h-dvh">
-      <div className="ambient" aria-hidden>
-        <span className="blob blob-a" />
-        <span className="blob blob-b" />
-        <span className="blob blob-c" />
-      </div>
-      <header className="fixed top-3 left-1/2 z-20 w-[min(1080px,calc(100%-1.25rem))] -translate-x-1/2 sm:top-4">
-        <div className="glass flex items-center justify-between rounded-full px-3 py-2 sm:px-4">
+      <div className="ambient" aria-hidden />
+      <header className="fixed top-3 left-1/2 z-20 w-[min(1072px,calc(100%-1.5rem))] -translate-x-1/2 sm:top-4">
+        <nav className="glass glass-nav glass-blur flex items-center justify-between gap-3 py-2 pr-2 pl-[18px]" aria-label="Main">
           <Logo />
+          {landing ? (
+            <div className="hidden items-center gap-1 md:flex">
+              <a className="nav-link" href="#how">
+                How it works
+              </a>
+              <a className="nav-link" href="#pricing">
+                Pricing
+              </a>
+              <a className="nav-link" href={GITHUB_URL} target="_blank" rel="noreferrer">
+                GitHub
+              </a>
+            </div>
+          ) : null}
           <div className="flex items-center gap-1">
             {session?.mock ? <span className="demo-pill">Demo</span> : null}
             <ThemeToggle />
@@ -61,7 +73,7 @@ export function Shell({ children }: { children: ReactNode }) {
                   {initial}
                 </button>
                 {open ? (
-                  <div className="glass absolute right-0 mt-2 w-52 rounded-2xl p-3 text-left">
+                  <div className="glass glass-blur absolute right-0 mt-2 w-52 rounded-2xl p-3 text-left">
                     <p className="truncate text-sm font-medium">{session.user.name}</p>
                     <p className="muted truncate text-xs">{session.user.email}</p>
                     <button type="button" className="btn-quiet mt-3 text-sm" onClick={() => void signOut()}>
@@ -71,8 +83,13 @@ export function Shell({ children }: { children: ReactNode }) {
                 ) : null}
               </div>
             ) : null}
+            {landing ? (
+              <Link href="/go" className="btn btn-sm ml-1">
+                {session?.user ? "Open your box" : "Get your box"}
+              </Link>
+            ) : null}
           </div>
-        </div>
+        </nav>
       </header>
       <div className="relative z-10">{children}</div>
     </div>

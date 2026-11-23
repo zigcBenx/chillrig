@@ -21,7 +21,7 @@ export function DialogContent({
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="overlay" />
-      <DialogPrimitive.Content className={cn("dialog glass", className)}>
+      <DialogPrimitive.Content className={cn("dialog glass glass-blur", className)}>
         <DialogPrimitive.Title className="pr-8 text-lg font-semibold tracking-tight">{title}</DialogPrimitive.Title>
         {description ? <DialogPrimitive.Description className="muted mt-2 text-sm">{description}</DialogPrimitive.Description> : null}
         <div className="mt-4">{children}</div>

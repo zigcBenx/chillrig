@@ -47,7 +47,7 @@ export function ConnectScreen({ kind }: { kind: "claude" | "chatgpt" }) {
         </div>
         <ol className="mt-4 grid grid-cols-3 gap-2 md:grid-cols-1">
           {copy.steps.map((step, index) => (
-            <li key={step} className="rounded-2xl bg-black/5 px-3 py-3 text-sm dark:bg-white/5">
+            <li key={step} className="rounded-2xl border border-[var(--chip-border)] bg-[var(--chip-fill)] px-3 py-3 text-sm">
               <span className="muted mr-2">{index + 1}</span>
               {step}
             </li>

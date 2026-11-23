@@ -69,7 +69,7 @@ export function CheckoutView() {
         <Button className="mt-8 w-full" disabled={pending || !billing} onClick={() => void pay()}>
           {paid ? "Create box" : "Pay"}
         </Button>
-        {error ? <p className="mt-4 text-sm text-[#9b3b3b] dark:text-[#ffb4b4]">{error}</p> : null}
+        {error ? <p className="mt-4 text-sm danger">{error}</p> : null}
       </div>
     </main>
   );

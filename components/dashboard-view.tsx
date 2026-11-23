@@ -101,7 +101,7 @@ export function DashboardView() {
     <main className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-4 pb-16 pt-24 sm:px-6">
       <section className="glass glass-live p-6 sm:p-8">
         <div className="flex items-center gap-2 text-sm">
-          <span className={`h-2.5 w-2.5 rounded-full ${running ? "pulse bg-emerald-400" : "bg-[#d6a15a]"}`} />
+          <span className={`h-2.5 w-2.5 rounded-full ${running ? "pulse bg-[var(--signal)] shadow-[0_0_10px_var(--signal)]" : "bg-[#d6a15a]"}`} />
           <span>{running ? "Running" : box.status === "error" ? "Needs attention" : "Working"}</span>
         </div>
         <h1 className="headline mt-4 text-4xl sm:text-5xl">{box.slug}</h1>
@@ -112,9 +112,9 @@ export function DashboardView() {
           </button>
         </div>
         {data.subscription?.status === "past_due" ? (
-          <p className="mt-3 text-sm text-[#9b3b3b] dark:text-[#ffb4b4]">Payment failed</p>
+          <p className="mt-3 text-sm danger">Payment failed</p>
         ) : null}
-        {box.error ? <p className="mt-3 text-sm text-[#9b3b3b] dark:text-[#ffb4b4]">{box.error}</p> : null}
+        {box.error ? <p className="mt-3 text-sm danger">{box.error}</p> : null}
       </section>
 
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -166,7 +166,7 @@ export function DashboardView() {
               autoComplete="off"
             />
             <Button disabled={pending || !url.trim()}>Clone</Button>
-            {message ? <p className="text-sm text-[#9b3b3b] dark:text-[#ffb4b4]">{message}</p> : null}
+            {message ? <p className="text-sm danger">{message}</p> : null}
           </form>
         </DialogContent>
       </Dialog>
