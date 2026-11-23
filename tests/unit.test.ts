@@ -129,7 +129,7 @@ describe("install script", () => {
     assert.ok(script.indexOf("ufw allow 22/tcp") < script.indexOf("ufw --force enable"));
     assert.ok(script.indexOf("ufw allow 22/tcp") < script.indexOf("ufw default deny incoming"));
     const defaults = placementPlan();
-    assert.deepEqual([...new Set(defaults.map((item) => item.serverType))], ["cx33", "cax21", "cx23", "cax11"]);
+    assert.deepEqual([...new Set(defaults.map((item) => item.serverType))], ["cx33", "cax21", "cx23", "cax11", "cpx12"]);
     assert.equal(placementPlan({ types: "cpx32,cx33", maxMonthlyEur: 12 }).every((item) => item.serverType === "cx33"), true);
     assert.equal(placementPlan({ types: "cpx32", maxMonthlyEur: 12 }).length, 0);
     const plan = placementPlan({

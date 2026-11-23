@@ -12,4 +12,12 @@ set -a; . ./.env.local; set +a
 curl -fsS -X PATCH "https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/config/auth" \
   -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" -H "Content-Type: application/json" \
   -d "{\"external_github_enabled\":true,\"external_github_client_id\":\"$1\",\"external_github_secret\":\"$2\"}" >/dev/null
-curl -fsS -H "apikey: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}" "${NEXT_PUBLIC_SUPABASE_URL}/auth/v1/settings" | grep -o '"github":[a-z]*'
+# The public settings endpoint lags the change by up to a minute; wait for it.
+for _ in $(seq 1 20); do
+  if curl -fsS -H "apikey: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}" "${NEXT_PUBLIC_SUPABASE_URL}/auth/v1/settings" | grep -q '"github":true'; then
+    echo '"github":true'; exit 0
+  fi
+  sleep 5
+done
+echo 'Saved, but Supabase still reports "github":false after 100s. Check again in a few minutes.' >&2
+exit 1

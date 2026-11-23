@@ -31,7 +31,10 @@ export function useAccount(pollMs: number) {
       }
     }
     void load();
-    const id = window.setInterval(() => void load(), pollMs);
+    // Skip polls while the tab is hidden: each one costs Worker CPU time.
+    const id = window.setInterval(() => {
+      if (!document.hidden) void load();
+    }, pollMs);
     return () => {
       cancel = true;
       window.clearInterval(id);

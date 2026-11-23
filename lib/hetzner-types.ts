@@ -17,10 +17,16 @@ export const SERVER_CATALOG: ServerTypeSpec[] = [
   { name: "cpx32", vcpu: 4, memoryGb: 8, diskGb: 160, monthlyEur: 30.49, arch: "x86" },
   { name: "cx23", vcpu: 2, memoryGb: 4, diskGb: 40, monthlyEur: 5.99, arch: "x86" },
   { name: "cax11", vcpu: 2, memoryGb: 4, diskGb: 40, monthlyEur: 5.99, arch: "arm" },
+  // Highest list price (fsn1/nbg1); hel1 is cheaper. 11.49 + IPv4 0.50 still fits a €12 cap.
+  { name: "cpx12", vcpu: 1, memoryGb: 2, diskGb: 40, monthlyEur: 11.49, arch: "x86" },
 ];
 
-/** Last resort cax11: same size as cx23 on ARM, often still in stock when the CX line sells out. */
-export const DEFAULT_TYPE_CHAIN = ["cx33", "cax21", "cx23", "cax11"];
+/**
+ * cax11 is the cx23 size on ARM, often still in stock when the CX line sells out.
+ * cpx12 (1 vCPU / 2 GB) is the emergency last resort so a paying customer is not left
+ * waiting when every cost-optimized type is sold out.
+ */
+export const DEFAULT_TYPE_CHAIN = ["cx33", "cax21", "cx23", "cax11", "cpx12"];
 export const DEFAULT_LOCATIONS = ["fsn1", "nbg1", "hel1"];
 export const DEFAULT_MAX_MONTHLY_EUR = 12;
 /** Hetzner primary IPv4, billed per server on top of the server price. */

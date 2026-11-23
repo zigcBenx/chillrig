@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 
 export function SetupView() {
   const router = useRouter();
-  const { data, error } = useAccount(1000);
+  const { data, error } = useAccount(3000);
   const [pending, setPending] = useState(false);
 
   // Back from Stripe: the webhook can land a few seconds after the redirect. Confirm the
